@@ -1,8 +1,10 @@
 using Microsoft.Data.Sqlite;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Vinan.Api.Data;
 using Vinan.Api.Models;
 using Vinan.Api.Services;
+using Vinan.Api.Security;
 
 namespace Vinan.Api.Tests;
 
@@ -71,7 +73,7 @@ public sealed class ConversationServiceTests
             var options = new DbContextOptionsBuilder<VinanDbContext>()
                 .UseSqlite(connection)
                 .Options;
-            var database = new VinanDbContext(options);
+            var database = new VinanDbContext(options, new PersonalDataProtector(new EphemeralDataProtectionProvider()));
             await database.Database.EnsureCreatedAsync();
             var model = new FakeAssistantModel();
             var service = new ConversationService(database, model, new AuditService(database));

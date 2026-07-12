@@ -9,12 +9,23 @@
 - Provider-neutral AI boundary with local fallback
 - Optional OpenAI Responses API provider
 - Voice input and spoken replies where supported by the browser
+- Single-owner passphrase authentication and owner-only API boundary
+- Enrolled browser devices with revocation and lock controls
+- Encrypted personal fields with persistent local keys and legacy-data upgrade
+- Versioned Entity Framework database migrations
+- One-click VS Code build and debug profile
 - GitHub Actions build and automated safety tests
 
 ## Current Contracts
 
 ```text
 GET    /api/health
+GET    /api/auth/status
+POST   /api/auth/setup
+POST   /api/auth/login
+POST   /api/auth/logout
+GET    /api/devices
+POST   /api/devices/{id}/revoke
 POST   /api/conversation/message
 GET    /api/conversations
 GET    /api/conversations/{id}/messages
@@ -31,15 +42,19 @@ POST   /api/actions/{id}/approve
 POST   /api/actions/{id}/deny
 ```
 
-## Next Milestone: Trusted Personal Gateway
+## Completed Milestone: Trusted Personal Gateway
 
 1. Owner authentication and device enrollment.
-2. Application-level encryption for personal records and secrets.
-3. Database migrations and encrypted backup/export.
-4. SignalR response streaming and richer conversation controls.
-5. Tool registry with scoped credentials and revocable grants.
-6. Calendar, notes, weather, and task connectors in read/prepare modes.
-7. Structured telemetry that excludes personal content by default.
+2. Application-level encryption for personal records.
+3. Database migrations and legacy plaintext upgrade.
+
+## Next Milestone: Live Intelligence and Tools
+
+1. SignalR response streaming and richer conversation controls.
+2. Tool registry with scoped credentials and revocable grants.
+3. Calendar, notes, weather, and task connectors in read/prepare modes.
+4. Encrypted backup and restore with owner-controlled recovery.
+5. Structured telemetry that excludes personal content by default.
 
 ## Build Rule
 

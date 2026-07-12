@@ -1,15 +1,32 @@
+using System.Security.Claims;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Vinan.Api.Configuration;
 using Vinan.Api.Data;
 using Vinan.Api.Models;
+using Vinan.Api.Security;
 using Vinan.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 var configuredConnection = builder.Configuration.GetConnectionString("Vinan");
-var dataDirectory = Path.Combine(builder.Environment.ContentRootPath, ".data");
+var configuredDataDirectory = builder.Configuration["Storage:DataDirectory"];
+var dataDirectory = string.IsNullOrWhiteSpace(configuredDataDirectory)
+    ? Path.Combine(builder.Environment.ContentRootPath, ".data")
+    : Path.GetFullPath(configuredDataDirectory, builder.Environment.ContentRootPath);
 Directory.CreateDirectory(dataDirectory);
+var keyDirectory = Path.Combine(dataDirectory, "keys");
+Directory.CreateDirectory(keyDirectory);
+if (!OperatingSystem.IsWindows())
+{
+    File.SetUnixFileMode(dataDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    File.SetUnixFileMode(keyDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+}
 var defaultDatabasePath = Path.Combine(dataDirectory, "vinan.db");
 var connectionString = string.IsNullOrWhiteSpace(configuredConnection)
     ? $"Data Source={defaultDatabasePath}"
@@ -17,7 +34,50 @@ var connectionString = string.IsNullOrWhiteSpace(configuredConnection)
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddDataProtection()
+    .SetApplicationName("VINAN")
+    .PersistKeysToFileSystem(new DirectoryInfo(keyDirectory))
+    .SetDefaultKeyLifetime(TimeSpan.FromDays(90));
+builder.Services.AddSingleton<PersonalDataProtector>();
 builder.Services.AddDbContext<VinanDbContext>(options => options.UseSqlite(connectionString));
+builder.Services.AddScoped<IPasswordHasher<OwnerProfile>, PasswordHasher<OwnerProfile>>();
+builder.Services.AddScoped<OwnerAuthService>();
+builder.Services.AddScoped<PersonalDataUpgradeService>();
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.Cookie.Name = "vinan.owner";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SameSite = SameSiteMode.Strict;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        options.SlidingExpiration = true;
+        options.ExpireTimeSpan = TimeSpan.FromDays(30);
+        options.Events.OnValidatePrincipal = async context =>
+        {
+            var auth = context.HttpContext.RequestServices.GetRequiredService<OwnerAuthService>();
+            if (!await auth.ValidateDeviceAsync(context.Principal!, context.HttpContext.RequestAborted))
+            {
+                context.RejectPrincipal();
+                await context.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+            }
+        };
+        options.Events.OnRedirectToLogin = context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return Task.CompletedTask;
+        };
+        options.Events.OnRedirectToAccessDenied = context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return Task.CompletedTask;
+        };
+    });
+builder.Services.AddAuthorization(options =>
+{
+    options.FallbackPolicy = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+});
 builder.Services.Configure<ModelOptions>(builder.Configuration.GetSection(ModelOptions.SectionName));
 builder.Services.AddSingleton<LocalAssistantModel>();
 builder.Services.AddHttpClient<OpenAiAssistantModel>(client =>
@@ -39,10 +99,10 @@ var app = builder.Build();
 await using (var scope = app.Services.CreateAsyncScope())
 {
     var database = scope.ServiceProvider.GetRequiredService<VinanDbContext>();
-    await database.Database.EnsureCreatedAsync();
+    await MigrationBootstrapper.PrepareAndMigrateAsync(database);
+    await scope.ServiceProvider.GetRequiredService<PersonalDataUpgradeService>().UpgradeLegacyRowsAsync();
     if (string.IsNullOrWhiteSpace(configuredConnection) && !OperatingSystem.IsWindows())
     {
-        File.SetUnixFileMode(dataDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         File.SetUnixFileMode(defaultDatabasePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 }
@@ -55,12 +115,82 @@ if (app.Environment.IsDevelopment())
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.Use(async (context, next) =>
+{
+    var unsafeApiRequest = context.Request.Path.StartsWithSegments("/api")
+        && !HttpMethods.IsGet(context.Request.Method)
+        && !HttpMethods.IsHead(context.Request.Method)
+        && !HttpMethods.IsOptions(context.Request.Method);
+    if (unsafeApiRequest && context.Request.Headers["X-Vinan-Request"] != "1")
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await context.Response.WriteAsJsonAsync(new { error = "VINAN request verification failed." });
+        return;
+    }
+
+    await next();
+});
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapGet("/api/health", (ModelRouter model) => Results.Ok(new HealthResponse(
     "VINAN API online",
     DateTimeOffset.UtcNow,
     "SQLite",
-    model.ActiveProvider)));
+    model.ActiveProvider))).AllowAnonymous();
+
+var authEndpoints = app.MapGroup("/api/auth");
+authEndpoints.MapGet("/status", async (HttpContext context, OwnerAuthService auth, CancellationToken cancellationToken) =>
+    Results.Ok(await auth.GetStatusAsync(context.User, cancellationToken))).AllowAnonymous();
+authEndpoints.MapPost("/setup", async (SetupOwnerRequest request, HttpContext context, OwnerAuthService auth, CancellationToken cancellationToken) =>
+{
+    var result = await auth.SetupAsync(request, cancellationToken);
+    if (!result.Succeeded)
+    {
+        return Results.BadRequest(new { error = result.Error });
+    }
+
+    await auth.SignInAsync(context, result.Device!, true);
+    return Results.Ok(result.Device);
+}).AllowAnonymous();
+authEndpoints.MapPost("/login", async (LoginRequest request, HttpContext context, OwnerAuthService auth, CancellationToken cancellationToken) =>
+{
+    var result = await auth.LoginAsync(request, cancellationToken);
+    if (!result.Succeeded)
+    {
+        return Results.Json(new { error = result.Error }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+
+    await auth.SignInAsync(context, result.Device!, request.RememberMe);
+    return Results.Ok(result.Device);
+}).AllowAnonymous();
+authEndpoints.MapPost("/logout", async (HttpContext context) =>
+{
+    await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.NoContent();
+});
+
+app.MapGet("/api/devices", async (HttpContext context, OwnerAuthService auth, CancellationToken cancellationToken) =>
+{
+    var currentDevice = OwnerAuthService.CurrentDeviceId(context.User);
+    return currentDevice is null
+        ? Results.Unauthorized()
+        : Results.Ok(await auth.GetDevicesAsync(currentDevice.Value, cancellationToken));
+});
+app.MapPost("/api/devices/{id:guid}/revoke", async (Guid id, HttpContext context, OwnerAuthService auth, CancellationToken cancellationToken) =>
+{
+    if (!await auth.RevokeDeviceAsync(id, cancellationToken))
+    {
+        return Results.NotFound();
+    }
+
+    if (OwnerAuthService.CurrentDeviceId(context.User) == id)
+    {
+        await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    }
+
+    return Results.NoContent();
+});
 
 var memory = app.MapGroup("/api/memory");
 memory.MapGet("/", async (VinanDbContext database, CancellationToken cancellationToken) =>
@@ -178,7 +308,7 @@ app.MapGet("/api/conversations/{id:guid}/messages", async (Guid id, VinanDbConte
         .OrderBy(item => item.CreatedAt)
         .ToListAsync(cancellationToken));
 
-app.MapFallbackToFile("index.html");
+app.MapFallbackToFile("index.html").AllowAnonymous();
 
 app.Run();
 
