@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VINAN Control Center</title>
+    <link rel="icon" href="./assets/vinan-core.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="VINAN navigation">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">V</div>
+          <div>
+            <p class="eyebrow">Virtual Intelligent Neural Assistant</p>
+            <h1>VINAN</h1>
+          </div>
+        </div>
+
+        <nav class="nav-list">
+          <button class="nav-item active" data-view="overview" type="button">
+            <span class="nav-icon">O</span>
+            <span>Overview</span>
+          </button>
+          <button class="nav-item" data-view="memory" type="button">
+            <span class="nav-icon">M</span>
+            <span>Memory</span>
+          </button>
+          <button class="nav-item" data-view="permissions" type="button">
+            <span class="nav-icon">P</span>
+            <span>Permissions</span>
+          </button>
+          <button class="nav-item" data-view="automation" type="button">
+            <span class="nav-icon">A</span>
+            <span>Automation</span>
+          </button>
+          <button class="nav-item" data-view="roadmap" type="button">
+            <span class="nav-icon">R</span>
+            <span>Roadmap</span>
+          </button>
+        </nav>
+
+        <section class="identity-panel">
+          <p class="panel-label">Owner</p>
+          <strong>Rahul</strong>
+          <span>Private assistant workspace</span>
+        </section>
+      </aside>
+
+      <main class="main-panel">
+        <section class="hero">
+          <img src="./assets/vinan-core.png" alt="VINAN neural assistant core" />
+          <div class="hero-copy">
+            <p class="eyebrow">Secure personal operating layer</p>
+            <h2>One assistant. Many tools. Your approval at the center.</h2>
+            <div class="hero-actions">
+              <button class="primary-action" id="voiceButton" type="button">Speak</button>
+              <button class="secondary-action" id="exportButton" type="button">Export Memory</button>
+            </div>
+          </div>
+          <div class="status-strip" aria-label="VINAN status">
+            <div><span class="dot live"></span> <span id="apiStatus">Local prototype</span></div>
+            <div><span class="dot amber"></span> Confirm external actions</div>
+            <div><span class="dot green"></span> Memory approval on</div>
+          </div>
+        </section>
+
+        <section class="workspace-grid">
+          <div class="conversation module">
+            <div class="module-header">
+              <div>
+                <p class="panel-label">Conversation</p>
+                <h3>VINAN Session</h3>
+              </div>
+              <button class="icon-button" id="clearChat" title="Clear conversation" type="button">X</button>
+            </div>
+            <div class="chat-log" id="chatLog" aria-live="polite"></div>
+            <form class="composer" id="composer">
+              <input id="promptInput" autocomplete="off" placeholder="Ask VINAN to remember, summarize, plan, or prepare an action" />
+              <button type="submit">Send</button>
+            </form>
+          </div>
+
+          <div class="side-stack">
+            <section class="module" id="memoryModule">
+              <div class="module-header">
+                <div>
+                  <p class="panel-label">Memory</p>
+                  <h3>Approved Facts</h3>
+                </div>
+                <button class="text-button" id="forgetAll" type="button">Delete</button>
+              </div>
+              <div class="memory-list" id="memoryList"></div>
+            </section>
+
+            <section class="module">
+              <div class="module-header">
+                <div>
+                  <p class="panel-label">Pending Action</p>
+                  <h3>Approval Checkpoint</h3>
+                </div>
+              <span class="risk-badge" id="pendingRisk">Level 3</span>
+            </div>
+              <p class="action-copy" id="pendingAction">No pending external action. VINAN will pause here before communication, finance, production, or physical actions.</p>
+              <div class="split-actions">
+                <button class="secondary-action" id="denyAction" type="button">Deny</button>
+                <button class="primary-action" id="approveAction" type="button">Approve</button>
+              </div>
+            </section>
+
+            <section class="module">
+              <div class="module-header">
+                <div>
+                  <p class="panel-label">Reminders</p>
+                  <h3>Local Queue</h3>
+                </div>
+                <button class="text-button" id="clearReminders" type="button">Clear</button>
+              </div>
+              <div class="reminder-list" id="reminderList"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view-panel" id="viewPanel"></section>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
