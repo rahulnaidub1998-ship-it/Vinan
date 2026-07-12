@@ -8,11 +8,29 @@ public sealed record ConversationResponse(
     MemoryItem? Memory,
     ReminderItem? Reminder,
     Guid ConversationId,
-    string Provider);
+    string Provider,
+    NoteItem? Note = null,
+    TaskItem? Task = null,
+    IReadOnlyList<ToolExecution>? ToolExecutions = null);
 public sealed record ConversationSummary(Guid Id, string Title, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
+public sealed record ConversationTurn(string Role, string Text);
+public sealed record ConversationStreamEvent(string Type, string? Delta = null, ConversationResponse? Response = null, string? Error = null);
+public sealed record ToolExecution(string ToolId, string Name, string Summary, DateTimeOffset CompletedAt);
 public sealed record CreateMemoryRequest(string Text, string? Category);
 public sealed record CreateReminderRequest(string Title, string? When);
+public sealed record CreateNoteRequest(string Text);
+public sealed record CreateTaskRequest(string Title, DateTimeOffset? DueAt = null, int Priority = 3);
 public sealed record ToolPermission(string Name, string Level, string Description);
+public sealed record ToolCapability(
+    string Id,
+    string Name,
+    string Category,
+    string Permission,
+    string Status,
+    string Description,
+    string Provider);
+public sealed record AiStatusResponse(bool Configured, string Provider, string Model, string ReasoningEffort, bool WebSearchEnabled);
+public sealed record ConfigureAiRequest(string ApiKey, string? Model = null);
 public sealed record AuthStatusResponse(
     bool IsConfigured,
     bool IsAuthenticated,

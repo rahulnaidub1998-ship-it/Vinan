@@ -23,6 +23,9 @@ public sealed class VinanDbContext : DbContext
     public DbSet<ConversationMessage> ConversationMessages => Set<ConversationMessage>();
     public DbSet<OwnerProfile> OwnerProfiles => Set<OwnerProfile>();
     public DbSet<DeviceEnrollment> DeviceEnrollments => Set<DeviceEnrollment>();
+    public DbSet<NoteItem> Notes => Set<NoteItem>();
+    public DbSet<TaskItem> Tasks => Set<TaskItem>();
+    public DbSet<ProviderCredential> ProviderCredentials => Set<ProviderCredential>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -76,5 +79,22 @@ public sealed class VinanDbContext : DbContext
             .WithMany()
             .HasForeignKey(item => item.OwnerId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<NoteItem>().Property(item => item.Text).HasMaxLength(10000).HasConversion(protectedText);
+        modelBuilder.Entity<NoteItem>().Property(item => item.CreatedAt).HasConversion<long>();
+        modelBuilder.Entity<NoteItem>().Property(item => item.UpdatedAt).HasConversion<long>();
+        modelBuilder.Entity<NoteItem>().HasIndex(item => item.UpdatedAt);
+
+        modelBuilder.Entity<TaskItem>().Property(item => item.Title).HasMaxLength(2000).HasConversion(protectedText);
+        modelBuilder.Entity<TaskItem>().Property(item => item.DueAt).HasConversion<long?>();
+        modelBuilder.Entity<TaskItem>().Property(item => item.CreatedAt).HasConversion<long>();
+        modelBuilder.Entity<TaskItem>().Property(item => item.CompletedAt).HasConversion<long?>();
+        modelBuilder.Entity<TaskItem>().HasIndex(item => new { item.IsComplete, item.DueAt, item.Priority });
+
+        modelBuilder.Entity<ProviderCredential>().Property(item => item.Provider).HasMaxLength(40);
+        modelBuilder.Entity<ProviderCredential>().Property(item => item.Secret).HasMaxLength(4000).HasConversion(protectedText);
+        modelBuilder.Entity<ProviderCredential>().Property(item => item.Model).HasMaxLength(120);
+        modelBuilder.Entity<ProviderCredential>().Property(item => item.UpdatedAt).HasConversion<long>();
+        modelBuilder.Entity<ProviderCredential>().HasIndex(item => item.Provider).IsUnique();
     }
 }

@@ -32,4 +32,19 @@ public sealed class IntentParserTests
         Assert.Equal("42 * 12", expression);
         Assert.Equal("504", result);
     }
+
+    [Fact]
+    public void ParsesNotesTasksAndWeather()
+    {
+        Assert.True(IntentParser.TryParseNote("Write down that passport renewal is important", out var note));
+        Assert.Equal("passport renewal is important", note);
+
+        Assert.True(IntentParser.TryParseTask("Create an urgent task tomorrow renew passport", out var task, out var dueAt, out var priority));
+        Assert.Equal("renew passport", task);
+        Assert.NotNull(dueAt);
+        Assert.Equal(1, priority);
+
+        Assert.True(IntentParser.TryParseWeatherLocation("What is the weather in San Diego?", out var location));
+        Assert.Equal("San Diego", location);
+    }
 }

@@ -86,3 +86,31 @@ public sealed class DeviceEnrollment
     public DateTimeOffset LastSeenAt { get; set; }
     public DateTimeOffset? RevokedAt { get; set; }
 }
+
+public sealed class NoteItem
+{
+    public Guid Id { get; set; }
+    public string Text { get; set; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
+public sealed class TaskItem
+{
+    public Guid Id { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public DateTimeOffset? DueAt { get; set; }
+    public int Priority { get; set; } = 3;
+    public bool IsComplete { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+}
+
+public sealed class ProviderCredential
+{
+    public Guid Id { get; set; }
+    public string Provider { get; set; } = "OpenAI";
+    public string Secret { get; set; } = string.Empty;
+    public string Model { get; set; } = "gpt-5.6-sol";
+    public DateTimeOffset UpdatedAt { get; set; }
+}

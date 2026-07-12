@@ -1,6 +1,6 @@
 # VINAN
 
-VINAN (Virtual Intelligent Neural Assistant) is a secure, voice-first personal AI operating layer. This repository contains its working foundation: a private browser control center and a .NET API with owner authentication, encrypted personal data, durable memory, conversation history, reminders, permissions, approval-gated actions, an audit trail, and a provider-neutral intelligence layer.
+VINAN (Virtual Intelligent Neural Assistant) is a secure, voice-first personal AI operating layer. This repository contains a working private control center and .NET API with owner authentication, encrypted personal data, streamed contextual conversation, adaptive memory, real productivity and information tools, approval-gated actions, an audit trail, and a provider-neutral intelligence layer.
 
 ## Run VINAN
 
@@ -18,34 +18,42 @@ In VS Code, open this repository, reload the window once after installing the re
 
 ## What Works Today
 
-- Conversation shell with local fallback
+- Streamed multi-turn conversation with saved context and local fallback
 - Owner passphrase setup, sign-in, lock, and per-browser device enrollment
 - Revocable device access with protected API routes
 - Application-level encryption for personal database fields
 - Versioned database migrations, including legacy local-database adoption
 - SQLite-backed approved memory that survives restarts
+- Relevance-ranked memory context for each model request
 - Saved conversation sessions that can be reopened
 - Reminder creation and completion
+- Encrypted persistent notes and priority-aware tasks
+- Live current weather and three-day forecasts through Open-Meteo
+- Local calculator, clock, task optimizer, and tool execution receipts
+- Tool registry with readiness, provider, and permission visibility
 - Voice input where the browser supports speech recognition
 - Permission visibility for connected tools
 - Approval queue for sensitive and high-risk actions
 - Audit history and local data export
-- Optional OpenAI Responses API provider with automatic local fallback
-- Automated tests for risk classification, intent parsing, persistence, and model isolation
+- Optional GPT-5.6 Responses API reasoning, current web search, and automatic local fallback
+- Owner-only AI settings with encrypted API-key storage and removal
+- Automated tests for safety, streaming, context, tools, encryption, persistence, and provider isolation
 - API documentation at `/swagger` in development
 
 ## Optional AI Provider
 
-VINAN works without a cloud model. To enable OpenAI responses for ordinary low-risk conversation, set the API key before starting the app:
+VINAN's deterministic tools work without a cloud model. For advanced reasoning and current web research, open **Intelligence** and connect an OpenAI API key. VINAN encrypts the saved credential before writing it to SQLite and never stores it in browser storage.
+
+The environment-variable path is also supported:
 
 ```bash
 export OPENAI_API_KEY="your-key"
 dotnet run --project src/Vinan.Api/Vinan.Api.csproj --urls http://127.0.0.1:5017
 ```
 
-The default balanced model is `gpt-5.6-terra`. Override it with `Models__Model`. Never commit an API key to this repository.
+The default flagship model is `gpt-5.6-sol`, with medium reasoning and response verbosity. Select Sol, Terra, or Luna in the control center, or override the default with `Models__Model`. Never commit an API key to this repository.
 
-Deterministic VINAN rules process memory, reminders, calculations, and Level 3/4 actions before the model layer. High-risk requests never reach the model.
+Deterministic VINAN rules process memory, notes, tasks, reminders, weather, calculations, optimization, and Level 3/4 actions before the model layer. High-risk requests never reach the model.
 
 ## Test
 
