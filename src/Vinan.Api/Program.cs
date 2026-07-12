@@ -1,251 +1,207 @@
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
+using Microsoft.EntityFrameworkCore;
+using Vinan.Api.Configuration;
+using Vinan.Api.Data;
+using Vinan.Api.Models;
+using Vinan.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var configuredConnection = builder.Configuration.GetConnectionString("Vinan");
+var dataDirectory = Path.Combine(builder.Environment.ContentRootPath, ".data");
+Directory.CreateDirectory(dataDirectory);
+var defaultDatabasePath = Path.Combine(dataDirectory, "vinan.db");
+var connectionString = string.IsNullOrWhiteSpace(configuredConnection)
+    ? $"Data Source={defaultDatabasePath}"
+    : configuredConnection;
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
-builder.Services.AddSingleton<VinanStateStore>();
+builder.Services.AddDbContext<VinanDbContext>(options => options.UseSqlite(connectionString));
+builder.Services.Configure<ModelOptions>(builder.Configuration.GetSection(ModelOptions.SectionName));
+builder.Services.AddSingleton<LocalAssistantModel>();
+builder.Services.AddHttpClient<OpenAiAssistantModel>(client =>
+{
+    client.BaseAddress = new Uri("https://api.openai.com/");
+    client.Timeout = TimeSpan.FromSeconds(45);
+});
+builder.Services.AddScoped<ModelRouter>();
+builder.Services.AddScoped<IAssistantModel>(services => services.GetRequiredService<ModelRouter>());
+builder.Services.AddScoped<AuditService>();
+builder.Services.AddScoped<ConversationService>();
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
 });
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("LocalPrototype", policy =>
-        policy.AllowAnyHeader()
-            .AllowAnyMethod()
-            .AllowAnyOrigin());
-});
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+await using (var scope = app.Services.CreateAsyncScope())
+{
+    var database = scope.ServiceProvider.GetRequiredService<VinanDbContext>();
+    await database.Database.EnsureCreatedAsync();
+    if (string.IsNullOrWhiteSpace(configuredConnection) && !OperatingSystem.IsWindows())
+    {
+        File.SetUnixFileMode(dataDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        File.SetUnixFileMode(defaultDatabasePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
+}
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
-app.UseCors("LocalPrototype");
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-app.MapGet("/api/health", () => Results.Ok(new HealthResponse("VINAN API online", DateTimeOffset.UtcNow)));
+app.MapGet("/api/health", (ModelRouter model) => Results.Ok(new HealthResponse(
+    "VINAN API online",
+    DateTimeOffset.UtcNow,
+    "SQLite",
+    model.ActiveProvider)));
 
 var memory = app.MapGroup("/api/memory");
-memory.MapGet("/", (VinanStateStore store) => store.Memories.OrderByDescending(item => item.CreatedAt));
-memory.MapPost("/", (CreateMemoryRequest request, VinanStateStore store) =>
+memory.MapGet("/", async (VinanDbContext database, CancellationToken cancellationToken) =>
+    await database.Memories.AsNoTracking()
+        .OrderByDescending(item => item.CreatedAt)
+        .ToListAsync(cancellationToken));
+memory.MapPost("/", async (CreateMemoryRequest request, VinanDbContext database, AuditService audit, CancellationToken cancellationToken) =>
 {
     if (string.IsNullOrWhiteSpace(request.Text))
     {
         return Results.BadRequest(new { error = "Memory text is required." });
     }
 
-    var category = string.IsNullOrWhiteSpace(request.Category) ? "Preference" : request.Category.Trim();
-    var item = new MemoryItem(Guid.NewGuid(), request.Text.Trim(), category, DateTimeOffset.UtcNow);
-    store.Memories.Add(item);
-    store.AddAudit("Approved memory stored", RiskLevel.Level2);
+    var item = new MemoryItem
+    {
+        Id = Guid.NewGuid(),
+        Text = request.Text.Trim(),
+        Category = string.IsNullOrWhiteSpace(request.Category) ? "Preference" : request.Category.Trim(),
+        CreatedAt = DateTimeOffset.UtcNow,
+    };
+    database.Memories.Add(item);
+    audit.Add("Approved memory stored", RiskLevel.Level2);
+    await database.SaveChangesAsync(cancellationToken);
     return Results.Created($"/api/memory/{item.Id}", item);
 });
-memory.MapDelete("/{id:guid}", (Guid id, VinanStateStore store) =>
+memory.MapDelete("/{id:guid}", async (Guid id, VinanDbContext database, AuditService audit, CancellationToken cancellationToken) =>
 {
-    var removed = store.Memories.RemoveAll(item => item.Id == id) > 0;
-    if (removed)
+    var item = await database.Memories.FindAsync(new object[] { id }, cancellationToken);
+    if (item is null)
     {
-        store.AddAudit("Memory deleted", RiskLevel.Level2);
+        return Results.NotFound();
     }
 
-    return removed ? Results.NoContent() : Results.NotFound();
+    database.Memories.Remove(item);
+    audit.Add("Memory deleted", RiskLevel.Level2);
+    await database.SaveChangesAsync(cancellationToken);
+    return Results.NoContent();
 });
 
 var reminders = app.MapGroup("/api/reminders");
-reminders.MapGet("/", (VinanStateStore store) => store.Reminders
-    .Where(item => !item.IsComplete)
-    .OrderByDescending(item => item.CreatedAt));
-reminders.MapPost("/", (CreateReminderRequest request, VinanStateStore store) =>
+reminders.MapGet("/", async (VinanDbContext database, CancellationToken cancellationToken) =>
+    await database.Reminders.AsNoTracking()
+        .Where(item => !item.IsComplete)
+        .OrderByDescending(item => item.CreatedAt)
+        .ToListAsync(cancellationToken));
+reminders.MapPost("/", async (CreateReminderRequest request, VinanDbContext database, AuditService audit, CancellationToken cancellationToken) =>
 {
     if (string.IsNullOrWhiteSpace(request.Title))
     {
         return Results.BadRequest(new { error = "Reminder title is required." });
     }
 
-    var item = new ReminderItem(Guid.NewGuid(), request.Title.Trim(), request.When ?? "Scheduled", false, DateTimeOffset.UtcNow);
-    store.Reminders.Add(item);
-    store.AddAudit("Reminder created", RiskLevel.Level2);
+    var item = new ReminderItem
+    {
+        Id = Guid.NewGuid(),
+        Title = request.Title.Trim(),
+        When = string.IsNullOrWhiteSpace(request.When) ? "Scheduled" : request.When.Trim(),
+        CreatedAt = DateTimeOffset.UtcNow,
+    };
+    database.Reminders.Add(item);
+    audit.Add("Reminder created", RiskLevel.Level2);
+    await database.SaveChangesAsync(cancellationToken);
     return Results.Created($"/api/reminders/{item.Id}", item);
 });
-reminders.MapPost("/{id:guid}/complete", (Guid id, VinanStateStore store) =>
+reminders.MapPost("/{id:guid}/complete", async (Guid id, VinanDbContext database, AuditService audit, CancellationToken cancellationToken) =>
 {
-    var reminder = store.Reminders.FirstOrDefault(item => item.Id == id);
+    var reminder = await database.Reminders.FindAsync(new object[] { id }, cancellationToken);
     if (reminder is null)
     {
         return Results.NotFound();
     }
 
-    store.Reminders.Remove(reminder);
-    store.Reminders.Add(reminder with { IsComplete = true });
-    store.AddAudit("Reminder completed", RiskLevel.Level2);
-    return Results.Ok(reminder with { IsComplete = true });
+    reminder.IsComplete = true;
+    audit.Add("Reminder completed", RiskLevel.Level2);
+    await database.SaveChangesAsync(cancellationToken);
+    return Results.Ok(reminder);
 });
 
 app.MapGet("/api/permissions", () => VinanPermissions.Default);
-app.MapGet("/api/audit", (VinanStateStore store) => store.Audit.OrderByDescending(item => item.CreatedAt));
+app.MapGet("/api/audit", async (VinanDbContext database, CancellationToken cancellationToken) =>
+    await database.AuditEvents.AsNoTracking()
+        .OrderByDescending(item => item.CreatedAt)
+        .Take(100)
+        .ToListAsync(cancellationToken));
 
 var actions = app.MapGroup("/api/actions");
-actions.MapGet("/", (VinanStateStore store) => store.PendingActions.OrderByDescending(item => item.CreatedAt));
-actions.MapPost("/{id:guid}/approve", (Guid id, VinanStateStore store) =>
-{
-    var action = store.PendingActions.FirstOrDefault(item => item.Id == id);
-    if (action is null)
-    {
-        return Results.NotFound();
-    }
+actions.MapGet("/", async (VinanDbContext database, CancellationToken cancellationToken) =>
+    await database.PendingActions.AsNoTracking()
+        .Where(item => item.Status == ActionStatus.Pending)
+        .OrderByDescending(item => item.CreatedAt)
+        .ToListAsync(cancellationToken));
+actions.MapPost("/{id:guid}/approve", async (Guid id, VinanDbContext database, AuditService audit, CancellationToken cancellationToken) =>
+    await ResolveActionAsync(id, ActionStatus.Approved, database, audit, cancellationToken));
+actions.MapPost("/{id:guid}/deny", async (Guid id, VinanDbContext database, AuditService audit, CancellationToken cancellationToken) =>
+    await ResolveActionAsync(id, ActionStatus.Denied, database, audit, cancellationToken));
 
-    store.PendingActions.Remove(action);
-    store.AddAudit($"Action approved: {action.Summary}", action.RiskLevel);
-    return Results.Ok(action with { Status = "Approved" });
-});
-actions.MapPost("/{id:guid}/deny", (Guid id, VinanStateStore store) =>
-{
-    var action = store.PendingActions.FirstOrDefault(item => item.Id == id);
-    if (action is null)
-    {
-        return Results.NotFound();
-    }
-
-    store.PendingActions.Remove(action);
-    store.AddAudit($"Action denied: {action.Summary}", action.RiskLevel);
-    return Results.Ok(action with { Status = "Denied" });
-});
-
-app.MapPost("/api/conversation/message", (ConversationRequest request, VinanStateStore store) =>
+app.MapPost("/api/conversation/message", async (ConversationRequest request, ConversationService conversation, CancellationToken cancellationToken) =>
 {
     if (string.IsNullOrWhiteSpace(request.Message))
     {
         return Results.BadRequest(new { error = "A message is required." });
     }
 
-    var result = VinanAssistant.Handle(request.Message, store);
-    return Results.Ok(result);
+    return Results.Ok(await conversation.HandleAsync(request, cancellationToken));
 });
+app.MapGet("/api/conversations", async (VinanDbContext database, CancellationToken cancellationToken) =>
+    await database.Conversations.AsNoTracking()
+        .OrderByDescending(item => item.UpdatedAt)
+        .Select(item => new ConversationSummary(item.Id, item.Title, item.CreatedAt, item.UpdatedAt))
+        .Take(50)
+        .ToListAsync(cancellationToken));
+app.MapGet("/api/conversations/{id:guid}/messages", async (Guid id, VinanDbContext database, CancellationToken cancellationToken) =>
+    await database.ConversationMessages.AsNoTracking()
+        .Where(item => item.ConversationId == id)
+        .OrderBy(item => item.CreatedAt)
+        .ToListAsync(cancellationToken));
 
 app.MapFallbackToFile("index.html");
 
 app.Run();
 
-public sealed class VinanStateStore
+static async Task<IResult> ResolveActionAsync(
+    Guid id,
+    ActionStatus status,
+    VinanDbContext database,
+    AuditService audit,
+    CancellationToken cancellationToken)
 {
-    public List<MemoryItem> Memories { get; } = new();
-    public List<ReminderItem> Reminders { get; } = new();
-    public List<PendingAction> PendingActions { get; } = new();
-    public List<AuditEvent> Audit { get; } = new();
-
-    public void AddAudit(string action, RiskLevel riskLevel)
+    var action = await database.PendingActions.FindAsync(new object[] { id }, cancellationToken);
+    if (action is null || action.Status != ActionStatus.Pending)
     {
-        Audit.Add(new AuditEvent(Guid.NewGuid(), action, riskLevel.ToString(), DateTimeOffset.UtcNow));
+        return Results.NotFound();
     }
+
+    action.Status = status;
+    action.ResolvedAt = DateTimeOffset.UtcNow;
+    audit.Add($"Action {status.ToString().ToLowerInvariant()}: {action.Summary}", action.RiskLevel);
+    await database.SaveChangesAsync(cancellationToken);
+    return Results.Ok(action);
 }
 
-public static class VinanAssistant
+public partial class Program
 {
-    public static ConversationResponse Handle(string rawMessage, VinanStateStore store)
-    {
-        var message = rawMessage.Trim();
-        var lower = message.ToLowerInvariant();
-
-        if (lower.Contains("remember"))
-        {
-            var text = StripMemory(message);
-            var memory = new MemoryItem(Guid.NewGuid(), text, "Preference", DateTimeOffset.UtcNow);
-            store.Memories.Add(memory);
-            store.AddAudit("Approved memory stored", RiskLevel.Level2);
-            return new ConversationResponse($"I saved this as approved memory: {text}", null, memory, null);
-        }
-
-        if (lower.Contains("reminder"))
-        {
-            var title = StripReminder(message);
-            if (IsDateOnlyReminder(title))
-            {
-                title = "Reminder";
-            }
-
-            var reminder = new ReminderItem(Guid.NewGuid(), title, lower.Contains("tomorrow") ? "Tomorrow" : "Scheduled", false, DateTimeOffset.UtcNow);
-            store.Reminders.Add(reminder);
-            store.AddAudit("Reminder created", RiskLevel.Level2);
-            return new ConversationResponse($"I created a local reminder: {title}.", null, null, reminder);
-        }
-
-        if (lower.Contains("transfer") || lower.Contains("buy ") || lower.Contains("deploy") || lower.Contains("unlock"))
-        {
-            var action = new PendingAction(Guid.NewGuid(), $"High-risk request blocked pending strong confirmation: \"{message}\".", RiskLevel.Level4, "Pending", DateTimeOffset.UtcNow);
-            store.PendingActions.Add(action);
-            store.AddAudit("Action queued for approval", RiskLevel.Level4);
-            return new ConversationResponse("That is a high-risk action. I queued it for strong confirmation and will not execute it automatically.", action, null, null);
-        }
-
-        if (lower.Contains("calendar") || lower.Contains("meeting") || lower.Contains("send") || lower.Contains("email"))
-        {
-            var action = new PendingAction(Guid.NewGuid(), $"Prepare action from request: \"{message}\". Confirmation is required before execution.", RiskLevel.Level3, "Pending", DateTimeOffset.UtcNow);
-            store.PendingActions.Add(action);
-            store.AddAudit("Action queued for approval", RiskLevel.Level3);
-            return new ConversationResponse("I prepared that as a pending action and paused for confirmation.", action, null, null);
-        }
-
-        store.AddAudit("Conversation response generated", RiskLevel.Level1);
-        return new ConversationResponse("I can route that into memory, reminders, or an approval-gated action.", null, null, null);
-    }
-
-    private static string StripMemory(string message)
-    {
-        var result = Regex.Replace(message, @"^(vinan,?\s*)?remember\s+(that\s+)?", string.Empty, RegexOptions.IgnoreCase);
-        return string.IsNullOrWhiteSpace(result) ? message : result.Trim(' ', ':', '.', ',');
-    }
-
-    private static string StripReminder(string message)
-    {
-        var result = Regex.Replace(message, @"^(vinan,?\s*)?(create|add|set)?\s*a?\s*reminder\s*(to|for)?\s*", string.Empty, RegexOptions.IgnoreCase);
-        return string.IsNullOrWhiteSpace(result) ? message : result.Trim(' ', ':', '.', ',');
-    }
-
-    private static bool IsDateOnlyReminder(string title)
-    {
-        return title.Equals("today", StringComparison.OrdinalIgnoreCase)
-            || title.Equals("tomorrow", StringComparison.OrdinalIgnoreCase)
-            || title.Equals("tonight", StringComparison.OrdinalIgnoreCase);
-    }
 }
-
-public static class VinanPermissions
-{
-    public static IReadOnlyList<ToolPermission> Default { get; } = new List<ToolPermission>
-    {
-        new("Calendar", "Read", "VINAN may inspect calendar information."),
-        new("Gmail", "Prepare", "VINAN may draft but not send."),
-        new("Reminders", "Execute", "VINAN may create reminders inside configured limits."),
-        new("Files", "Confirm", "VINAN must ask before organizing files."),
-        new("Finance", "Restricted", "VINAN must not execute financial actions automatically."),
-        new("SmartHome", "Confirm", "VINAN must ask before device actions."),
-        new("Production", "Restricted", "VINAN must not execute production changes automatically."),
-    };
-}
-
-public enum RiskLevel
-{
-    Level1,
-    Level2,
-    Level3,
-    Level4
-}
-
-public sealed record HealthResponse(string Status, DateTimeOffset TimeUtc);
-public sealed record ConversationRequest(string Message);
-public sealed record ConversationResponse(string Reply, PendingAction? PendingAction, MemoryItem? Memory, ReminderItem? Reminder);
-public sealed record CreateMemoryRequest(string Text, string? Category);
-public sealed record CreateReminderRequest(string Title, string? When);
-public sealed record MemoryItem(Guid Id, string Text, string Category, DateTimeOffset CreatedAt);
-public sealed record ReminderItem(Guid Id, string Title, string When, bool IsComplete, DateTimeOffset CreatedAt);
-public sealed record PendingAction(Guid Id, string Summary, RiskLevel RiskLevel, string Status, DateTimeOffset CreatedAt);
-public sealed record AuditEvent(Guid Id, string Action, string RiskLevel, DateTimeOffset CreatedAt);
-public sealed record ToolPermission(string Name, string Level, string Description);

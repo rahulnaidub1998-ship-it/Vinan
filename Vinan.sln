@@ -7,6 +7,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{B3D2C564-6EE
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Vinan.Api", "src\Vinan.Api\Vinan.Api.csproj", "{6A34B518-4DAF-4BC9-926E-26F198E138A0}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{D5FB3B00-CE86-4E56-9C5A-5D202548AC0F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Vinan.Api.Tests", "tests\Vinan.Api.Tests\Vinan.Api.Tests.csproj", "{0B306CF4-6D04-4813-8D6F-4E3A2C8E8198}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -20,8 +24,13 @@ Global
 		{6A34B518-4DAF-4BC9-926E-26F198E138A0}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{6A34B518-4DAF-4BC9-926E-26F198E138A0}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{6A34B518-4DAF-4BC9-926E-26F198E138A0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0B306CF4-6D04-4813-8D6F-4E3A2C8E8198}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0B306CF4-6D04-4813-8D6F-4E3A2C8E8198}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0B306CF4-6D04-4813-8D6F-4E3A2C8E8198}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0B306CF4-6D04-4813-8D6F-4E3A2C8E8198}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{6A34B518-4DAF-4BC9-926E-26F198E138A0} = {B3D2C564-6EEB-416E-BAD1-58E91B1BAC9D}
+		{0B306CF4-6D04-4813-8D6F-4E3A2C8E8198} = {D5FB3B00-CE86-4E56-9C5A-5D202548AC0F}
 	EndGlobalSection
 EndGlobal

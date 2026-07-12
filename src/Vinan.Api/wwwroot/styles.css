@@ -358,6 +358,7 @@ h3 {
 .memory-list,
 .reminder-list,
 .note-list,
+.conversation-list,
 .permission-grid,
 .roadmap-grid,
 .audit-list {
@@ -368,6 +369,7 @@ h3 {
 .memory-item,
 .reminder-item,
 .note-item,
+.conversation-item,
 .permission-item,
 .roadmap-item,
 .audit-item,
@@ -396,6 +398,28 @@ h3 {
 .note-item {
   display: grid;
   gap: 0.35rem;
+}
+
+.recent-conversations {
+  margin-top: 1rem;
+}
+
+.conversation-item {
+  width: 100%;
+  display: grid;
+  gap: 0.3rem;
+  color: var(--text);
+  text-align: left;
+}
+
+.conversation-item:hover {
+  border-color: rgba(45, 212, 191, 0.45);
+  background: rgba(45, 212, 191, 0.08);
+}
+
+.conversation-item span {
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .reminder-item header,
