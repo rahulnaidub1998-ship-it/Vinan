@@ -13,6 +13,20 @@ public sealed record ConversationSummary(Guid Id, string Title, DateTimeOffset C
 public sealed record CreateMemoryRequest(string Text, string? Category);
 public sealed record CreateReminderRequest(string Title, string? When);
 public sealed record ToolPermission(string Name, string Level, string Description);
+public sealed record AuthStatusResponse(
+    bool IsConfigured,
+    bool IsAuthenticated,
+    string? OwnerName,
+    Guid? DeviceId);
+public sealed record SetupOwnerRequest(string DisplayName, string Passphrase, Guid DeviceId, string DeviceName);
+public sealed record LoginRequest(string Passphrase, Guid DeviceId, string DeviceName, bool RememberMe = true);
+public sealed record AuthenticatedDevice(Guid OwnerId, string OwnerName, Guid DeviceId);
+public sealed record DeviceSummary(
+    Guid Id,
+    string Name,
+    DateTimeOffset EnrolledAt,
+    DateTimeOffset LastSeenAt,
+    bool IsCurrent);
 
 public static class VinanPermissions
 {

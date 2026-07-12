@@ -4,19 +4,27 @@ const promptInput = document.querySelector("#promptInput");
 const memoryList = document.querySelector("#memoryList");
 const reminderList = document.querySelector("#reminderList");
 const viewPanel = document.querySelector("#viewPanel");
+const authGate = document.querySelector("#authGate");
+const authForm = document.querySelector("#authForm");
+const appShell = document.querySelector("#appShell");
 const synth = window.speechSynthesis;
 const API_BASE = window.location.protocol === "file:" ? "http://127.0.0.1:5017" : window.location.origin;
+const DEVICE_ID = localStorage.getItem("vinan.deviceId") || crypto.randomUUID();
+localStorage.setItem("vinan.deviceId", DEVICE_ID);
+["vinan.memories", "vinan.audit", "vinan.reminders", "vinan.notes", "vinan.pendingActions"].forEach((key) => localStorage.removeItem(key));
 let apiOnline = false;
 let voiceRepliesEnabled = false;
 
 const state = {
-  memories: JSON.parse(localStorage.getItem("vinan.memories") || "[]"),
-  audit: JSON.parse(localStorage.getItem("vinan.audit") || "[]"),
-  reminders: JSON.parse(localStorage.getItem("vinan.reminders") || "[]"),
-  notes: JSON.parse(localStorage.getItem("vinan.notes") || "[]"),
-  pendingActions: JSON.parse(localStorage.getItem("vinan.pendingActions") || "[]"),
+  memories: [],
+  audit: [],
+  reminders: [],
+  notes: [],
+  pendingActions: [],
   conversationId: localStorage.getItem("vinan.conversationId") || null,
   conversations: [],
+  devices: [],
+  auth: null,
   permissions: {
     Calendar: "Read",
     Gmail: "Prepare",
@@ -27,6 +35,51 @@ const state = {
     Production: "Restricted",
   },
 };
+
+function apiFetch(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  const method = (options.method || "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) headers.set("X-Vinan-Request", "1");
+  return fetch(`${API_BASE}${path}`, { ...options, headers });
+}
+
+function defaultDeviceName() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || "Browser";
+  return `${platform} browser`;
+}
+
+function renderAuthGate(status) {
+  state.auth = status;
+  const configured = status?.isConfigured === true;
+  const authenticated = status?.isAuthenticated === true;
+  document.querySelector("#authMode").textContent = configured ? "Owner sign in" : "Owner setup";
+  document.querySelector("#authTitle").textContent = configured
+    ? `Welcome back, ${status.ownerName || "Owner"}`
+    : "Secure your personal assistant";
+  document.querySelector("#ownerNameField").hidden = configured;
+  document.querySelector("#rememberField").hidden = !configured;
+  document.querySelector("#passphrase").autocomplete = configured ? "current-password" : "new-password";
+  document.querySelector("#authSubmit").textContent = configured ? "Unlock VINAN" : "Secure VINAN";
+  document.querySelector("#ownerLabel").textContent = status?.ownerName || "Rahul";
+  document.querySelector("#authError").textContent = "";
+  authGate.hidden = authenticated;
+  appShell.toggleAttribute("inert", !authenticated);
+  appShell.setAttribute("aria-hidden", authenticated ? "false" : "true");
+}
+
+async function initializeAuth() {
+  document.querySelector("#deviceName").value ||= defaultDeviceName();
+  try {
+    const response = await apiFetch("/api/auth/status");
+    if (!response.ok) throw new Error("VINAN owner gateway is unavailable.");
+    const status = await response.json();
+    renderAuthGate(status);
+    if (status.isAuthenticated) await checkApi();
+  } catch {
+    renderAuthGate({ isConfigured: true, isAuthenticated: false, ownerName: "Owner" });
+    document.querySelector("#authError").textContent = "VINAN could not reach the private gateway.";
+  }
+}
 
 const seedMessages = [
   {
@@ -42,13 +95,25 @@ const seedMessages = [
 ];
 
 function save() {
-  localStorage.setItem("vinan.memories", JSON.stringify(state.memories));
-  localStorage.setItem("vinan.audit", JSON.stringify(state.audit));
-  localStorage.setItem("vinan.reminders", JSON.stringify(state.reminders));
-  localStorage.setItem("vinan.notes", JSON.stringify(state.notes));
-  localStorage.setItem("vinan.pendingActions", JSON.stringify(state.pendingActions));
   if (state.conversationId) localStorage.setItem("vinan.conversationId", state.conversationId);
   else localStorage.removeItem("vinan.conversationId");
+}
+
+function clearPrivateView() {
+  state.memories = [];
+  state.audit = [];
+  state.reminders = [];
+  state.notes = [];
+  state.pendingActions = [];
+  state.conversations = [];
+  state.devices = [];
+  state.conversationId = null;
+  chatLog.innerHTML = "";
+  renderMemory();
+  renderReminders();
+  renderPendingAction();
+  renderView("overview");
+  save();
 }
 
 function addAudit(action, level = "Level 1") {
@@ -87,7 +152,7 @@ function memoryText(memory) {
 async function checkApi() {
   let health = null;
   try {
-    const response = await fetch(`${API_BASE}/api/health`);
+    const response = await apiFetch("/api/health");
     apiOnline = response.ok;
     if (response.ok) health = await response.json();
   } catch {
@@ -105,16 +170,20 @@ async function checkApi() {
 
 async function hydrateFromApi() {
   try {
-    const [memoryResponse, reminderResponse, actionResponse, permissionResponse, auditResponse, conversationResponse] = await Promise.all([
-      fetch(`${API_BASE}/api/memory`),
-      fetch(`${API_BASE}/api/reminders`),
-      fetch(`${API_BASE}/api/actions`),
-      fetch(`${API_BASE}/api/permissions`),
-      fetch(`${API_BASE}/api/audit`),
-      fetch(`${API_BASE}/api/conversations`),
+    const [memoryResponse, reminderResponse, actionResponse, permissionResponse, auditResponse, conversationResponse, deviceResponse] = await Promise.all([
+      apiFetch("/api/memory"),
+      apiFetch("/api/reminders"),
+      apiFetch("/api/actions"),
+      apiFetch("/api/permissions"),
+      apiFetch("/api/audit"),
+      apiFetch("/api/conversations"),
+      apiFetch("/api/devices"),
     ]);
 
-    if (![memoryResponse, reminderResponse, actionResponse, permissionResponse, auditResponse, conversationResponse].every((response) => response.ok)) {
+    if (![memoryResponse, reminderResponse, actionResponse, permissionResponse, auditResponse, conversationResponse, deviceResponse].every((response) => response.ok)) {
+      if ([memoryResponse, reminderResponse, actionResponse, permissionResponse, auditResponse, conversationResponse, deviceResponse].some((response) => response.status === 401)) {
+        await initializeAuth();
+      }
       return;
     }
 
@@ -134,6 +203,7 @@ async function hydrateFromApi() {
       time: new Date(event.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     }));
     state.conversations = await conversationResponse.json();
+    state.devices = await deviceResponse.json();
 
     save();
     renderMemory();
@@ -166,7 +236,7 @@ function renderMemory() {
     remove.textContent = "Forget";
     remove.addEventListener("click", async () => {
       if (apiOnline && memory.id) {
-        const response = await fetch(`${API_BASE}/api/memory/${memory.id}`, { method: "DELETE" });
+        const response = await apiFetch(`/api/memory/${memory.id}`, { method: "DELETE" });
         if (!response.ok) return;
       }
       state.memories.splice(index, 1);
@@ -202,7 +272,7 @@ function renderReminders() {
     `;
     row.querySelector("button").addEventListener("click", async () => {
       if (apiOnline && reminder.id) {
-        const response = await fetch(`${API_BASE}/api/reminders/${reminder.id}/complete`, { method: "POST" });
+        const response = await apiFetch(`/api/reminders/${reminder.id}/complete`, { method: "POST" });
         if (!response.ok) return;
       }
       state.reminders.splice(index, 1);
@@ -355,7 +425,7 @@ async function responseForRemote(input) {
   if (!apiOnline) return null;
 
   try {
-    const response = await fetch(`${API_BASE}/api/conversation/message`, {
+    const response = await apiFetch("/api/conversation/message", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: input, conversationId: state.conversationId }),
@@ -401,7 +471,7 @@ async function responseForRemote(input) {
 
 async function syncAuditFromApi() {
   try {
-    const response = await fetch(`${API_BASE}/api/audit`);
+    const response = await apiFetch("/api/audit");
     if (!response.ok) return;
     const events = await response.json();
     state.audit = events.slice(0, 12).map((event) => ({
@@ -418,7 +488,7 @@ async function syncAuditFromApi() {
 
 async function syncConversationsFromApi() {
   try {
-    const response = await fetch(`${API_BASE}/api/conversations`);
+    const response = await apiFetch("/api/conversations");
     if (!response.ok) return;
     state.conversations = await response.json();
     renderView(document.querySelector(".nav-item.active")?.dataset.view || "overview");
@@ -429,7 +499,7 @@ async function syncConversationsFromApi() {
 
 async function loadConversation(conversationId) {
   if (!apiOnline) return;
-  const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/messages`);
+  const response = await apiFetch(`/api/conversations/${conversationId}/messages`);
   if (!response.ok) return;
 
   const messages = await response.json();
@@ -444,7 +514,7 @@ async function loadConversation(conversationId) {
 async function clearAllMemories() {
   if (apiOnline) {
     for (const memory of state.memories.filter((item) => item.id)) {
-      const response = await fetch(`${API_BASE}/api/memory/${memory.id}`, { method: "DELETE" });
+      const response = await apiFetch(`/api/memory/${memory.id}`, { method: "DELETE" });
       if (!response.ok) {
         addMessage("vinan", "I could not delete every memory. I refreshed the list to keep it accurate.");
         await hydrateFromApi();
@@ -463,7 +533,7 @@ async function clearAllMemories() {
 async function clearAllReminders() {
   if (apiOnline) {
     for (const reminder of state.reminders.filter((item) => item.id)) {
-      const response = await fetch(`${API_BASE}/api/reminders/${reminder.id}/complete`, { method: "POST" });
+      const response = await apiFetch(`/api/reminders/${reminder.id}/complete`, { method: "POST" });
       if (!response.ok) {
         addMessage("vinan", "I could not clear every reminder. I refreshed the queue to keep it accurate.");
         await hydrateFromApi();
@@ -487,7 +557,7 @@ async function resolvePendingAction(decision) {
   }
 
   if (apiOnline && action.id) {
-    const response = await fetch(`${API_BASE}/api/actions/${action.id}/${decision}`, { method: "POST" });
+    const response = await apiFetch(`/api/actions/${action.id}/${decision}`, { method: "POST" });
     if (!response.ok) {
       addMessage("vinan", "I could not record that decision. The action remains paused.");
       await hydrateFromApi();
@@ -507,6 +577,13 @@ async function resolvePendingAction(decision) {
       : "Denied and recorded. The action was kept from executing.",
   );
   save();
+}
+
+async function revokeDevice(deviceId) {
+  const response = await apiFetch(`/api/devices/${deviceId}/revoke`, { method: "POST" });
+  if (!response.ok) return;
+  state.devices = state.devices.filter((device) => device.id !== deviceId);
+  renderView("permissions");
 }
 
 function renderView(view) {
@@ -545,6 +622,10 @@ function renderView(view) {
             .map(([name, level]) => `<div class="permission-item"><div><strong>${name}</strong><br><span>${descriptionFor(level)}</span></div><span class="select-pill">${level}</span></div>`)
             .join("")}
         </div>
+      </section>
+      <section class="module device-module">
+        <div class="module-header"><div><p class="panel-label">Security</p><h3>Enrolled Devices</h3></div></div>
+        <div class="device-list">${renderDevicesHtml()}</div>
       </section>
     `,
     automation: `
@@ -622,6 +703,26 @@ function renderConversationsHtml() {
     .join("");
 }
 
+function renderDevicesHtml() {
+  if (!state.devices.length) {
+    return '<div class="device-item"><span class="item-meta">No enrolled devices found.</span></div>';
+  }
+
+  return state.devices
+    .map(
+      (device) => `
+        <div class="device-item">
+          <div>
+            <strong>${escapeHtml(device.name)}</strong><br>
+            <span>${device.isCurrent ? "Current device" : `Last active ${new Date(device.lastSeenAt).toLocaleDateString()}`}</span>
+          </div>
+          ${device.isCurrent ? '<span class="select-pill">Current</span>' : `<button class="text-button" type="button" data-revoke-device="${device.id}">Revoke</button>`}
+        </div>
+      `,
+    )
+    .join("");
+}
+
 function wireDynamicViewControls() {
   const noteForm = document.querySelector("#noteForm");
   if (noteForm) {
@@ -646,6 +747,10 @@ function wireDynamicViewControls() {
 
   document.querySelectorAll("[data-conversation-id]").forEach((button) => {
     button.addEventListener("click", () => void loadConversation(button.dataset.conversationId));
+  });
+
+  document.querySelectorAll("[data-revoke-device]").forEach((button) => {
+    button.addEventListener("click", () => void revokeDevice(button.dataset.revokeDevice));
   });
 }
 
@@ -722,6 +827,43 @@ document.querySelector("#approveAction").addEventListener("click", () => void re
 
 document.querySelector("#denyAction").addEventListener("click", () => void resolvePendingAction("deny"));
 
+authForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const configured = state.auth?.isConfigured === true;
+  const payload = configured
+    ? {
+        passphrase: document.querySelector("#passphrase").value,
+        deviceId: DEVICE_ID,
+        deviceName: document.querySelector("#deviceName").value.trim(),
+        rememberMe: document.querySelector("#rememberMe").checked,
+      }
+    : {
+        displayName: document.querySelector("#ownerName").value.trim(),
+        passphrase: document.querySelector("#passphrase").value,
+        deviceId: DEVICE_ID,
+        deviceName: document.querySelector("#deviceName").value.trim(),
+      };
+  const response = await apiFetch(configured ? "/api/auth/login" : "/api/auth/setup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "VINAN could not verify the owner." }));
+    document.querySelector("#authError").textContent = error.error || "VINAN could not verify the owner.";
+    return;
+  }
+
+  document.querySelector("#passphrase").value = "";
+  await initializeAuth();
+});
+
+document.querySelector("#lockButton").addEventListener("click", async () => {
+  await apiFetch("/api/auth/logout", { method: "POST" });
+  clearPrivateView();
+  await initializeAuth();
+});
+
 document.querySelector("#voiceButton").addEventListener("click", () => {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!Recognition) {
@@ -774,4 +916,4 @@ renderReminders();
 renderPendingAction();
 renderView("overview");
 seedMessages.forEach((message) => addMessage(message.role, message.text));
-checkApi();
+initializeAuth();

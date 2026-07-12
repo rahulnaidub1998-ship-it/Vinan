@@ -1,6 +1,6 @@
 # VINAN
 
-VINAN (Virtual Intelligent Neural Assistant) is a secure, voice-first personal AI operating layer. This repository contains its working foundation: a browser control center and a .NET API with durable memory, conversation history, reminders, permissions, approval-gated actions, an audit trail, and a provider-neutral intelligence layer.
+VINAN (Virtual Intelligent Neural Assistant) is a secure, voice-first personal AI operating layer. This repository contains its working foundation: a private browser control center and a .NET API with owner authentication, encrypted personal data, durable memory, conversation history, reminders, permissions, approval-gated actions, an audit trail, and a provider-neutral intelligence layer.
 
 ## Run VINAN
 
@@ -12,9 +12,17 @@ dotnet run --project src/Vinan.Api/Vinan.Api.csproj --urls http://127.0.0.1:5017
 
 Open [http://127.0.0.1:5017](http://127.0.0.1:5017).
 
+On first launch, create the VINAN owner with a passphrase of at least 12 characters. Each browser is enrolled as a device and can later be revoked from **Permissions > Enrolled Devices**.
+
+In VS Code, open this repository, reload the window once after installing the recommended extensions, and press `F5`. The included `VINAN: Run and Debug` profile starts the app at [http://127.0.0.1:5019](http://127.0.0.1:5019).
+
 ## What Works Today
 
 - Conversation shell with local fallback
+- Owner passphrase setup, sign-in, lock, and per-browser device enrollment
+- Revocable device access with protected API routes
+- Application-level encryption for personal database fields
+- Versioned database migrations, including legacy local-database adoption
 - SQLite-backed approved memory that survives restarts
 - Saved conversation sessions that can be reopened
 - Reminder creation and completion
@@ -63,6 +71,8 @@ tests/Vinan.Api.Tests/  Safety, intent, persistence, and routing tests
 docs/VINAN_BUILD_PLAN.md Product and engineering sequence
 ```
 
-Local data is stored under `src/Vinan.Api/.data` and the default database file is restricted to the current operating-system user. Application-level encryption, identity, and device authorization remain required before remote deployment.
+Local data is stored under `src/Vinan.Api/.data` by default. Change it with `Storage__DataDirectory=/absolute/path`. Personal text and identity fields are encrypted at the application boundary, and the database, data-protection key ring, and data directory are restricted to the current operating-system user on Unix-like systems.
+
+The local key ring is intentionally portable with the data directory and is not encrypted by an OS keychain. A remote deployment must protect it with a managed key service such as Azure Key Vault and must use HTTPS.
 
 See [the build plan](docs/VINAN_BUILD_PLAN.md) and [architecture guide](docs/ARCHITECTURE.md) for the staged roadmap and current trust boundaries.

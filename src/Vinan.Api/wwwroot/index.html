@@ -8,7 +8,43 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="app-shell">
+    <section class="auth-gate" id="authGate" aria-labelledby="authTitle">
+      <div class="auth-panel">
+        <div class="brand auth-brand">
+          <div class="brand-mark" aria-hidden="true">V</div>
+          <div>
+            <p class="eyebrow">Private owner gateway</p>
+            <h1>VINAN</h1>
+          </div>
+        </div>
+        <div>
+          <p class="panel-label" id="authMode">Owner setup</p>
+          <h2 id="authTitle">Secure your personal assistant</h2>
+        </div>
+        <form class="auth-form" id="authForm">
+          <label id="ownerNameField">
+            <span>Owner name</span>
+            <input id="ownerName" autocomplete="name" maxlength="80" value="Rahul" />
+          </label>
+          <label>
+            <span>Passphrase</span>
+            <input id="passphrase" type="password" autocomplete="current-password" minlength="12" placeholder="12 or more characters" required />
+          </label>
+          <label>
+            <span>Device name</span>
+            <input id="deviceName" autocomplete="off" maxlength="120" required />
+          </label>
+          <label class="remember-row" id="rememberField" hidden>
+            <input id="rememberMe" type="checkbox" checked />
+            <span>Keep this device signed in</span>
+          </label>
+          <p class="auth-error" id="authError" role="alert"></p>
+          <button class="primary-action" id="authSubmit" type="submit">Secure VINAN</button>
+        </form>
+      </div>
+    </section>
+
+    <div class="app-shell" id="appShell" aria-hidden="true" inert>
       <aside class="sidebar" aria-label="VINAN navigation">
         <div class="brand">
           <div class="brand-mark" aria-hidden="true">V</div>
@@ -43,8 +79,9 @@
 
         <section class="identity-panel">
           <p class="panel-label">Owner</p>
-          <strong>Rahul</strong>
+          <strong id="ownerLabel">Rahul</strong>
           <span>Private assistant workspace</span>
+          <button class="text-button" id="lockButton" type="button">Lock</button>
         </section>
       </aside>
 

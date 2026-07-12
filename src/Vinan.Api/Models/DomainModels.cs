@@ -67,3 +67,22 @@ public sealed class ConversationMessage
     public string Provider { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; }
 }
+
+public sealed class OwnerProfile
+{
+    public Guid Id { get; set; }
+    public string Scope { get; set; } = "owner";
+    public string DisplayName { get; set; } = "Rahul";
+    public string PasswordHash { get; set; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+public sealed class DeviceEnrollment
+{
+    public Guid Id { get; set; }
+    public Guid OwnerId { get; set; }
+    public string Name { get; set; } = "Personal device";
+    public DateTimeOffset EnrolledAt { get; set; }
+    public DateTimeOffset LastSeenAt { get; set; }
+    public DateTimeOffset? RevokedAt { get; set; }
+}

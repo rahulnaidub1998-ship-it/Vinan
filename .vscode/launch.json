@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "VINAN: Run and Debug",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build VINAN",
+      "program": "${workspaceFolder}/src/Vinan.Api/bin/Debug/net7.0/Vinan.Api.dll",
+      "args": [
+        "--urls",
+        "http://127.0.0.1:5019"
+      ],
+      "cwd": "${workspaceFolder}/src/Vinan.Api",
+      "stopAtEntry": false,
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "DOTNET_ROOT": "${env:HOME}/.dotnet",
+        "PATH": "${env:HOME}/.dotnet:${env:PATH}"
+      },
+      "serverReadyAction": {
+        "action": "openExternally",
+        "pattern": "\\bNow listening on:\\s+(https?://\\S+)",
+        "uriFormat": "%s"
+      }
+    }
+  ]
+}
