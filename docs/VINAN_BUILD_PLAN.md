@@ -1,49 +1,52 @@
 # VINAN Build Plan
 
-## Current Prototype
+## Completed Foundation
 
-The current local prototype is a browser-based VINAN control center with:
+- Integrated ASP.NET Core API and browser control center
+- Durable SQLite memory, reminders, pending actions, audit events, and conversation history
+- Permission levels and deterministic Level 1-4 risk classification
+- Approval and denial recording without false execution claims
+- Provider-neutral AI boundary with local fallback
+- Optional OpenAI Responses API provider
+- Voice input and spoken replies where supported by the browser
+- GitHub Actions build and automated safety tests
 
-- Conversation shell
-- Approved memory storage
-- Local reminders
-- Local notes
-- Approval queue for sensitive actions
-- Permission model display
-- Audit trail
-- Memory export
-- Browser speech recognition hook where supported
-
-## Next Engineering Milestone
-
-Build a .NET-centered foundation behind this interface:
-
-1. ASP.NET Core API for conversations, memories, reminders, permissions, and audit events.
-2. SQLite or PostgreSQL persistence for local development.
-3. Model-provider abstraction so VINAN is not locked to one AI vendor.
-4. Tool registry with risk levels and permission checks.
-5. SignalR streaming endpoint for assistant responses.
-6. Authentication placeholder that can grow into full device authorization.
-
-## First Backend Contracts
+## Current Contracts
 
 ```text
-POST /api/conversation/message
-GET  /api/memory
-POST /api/memory
+GET    /api/health
+POST   /api/conversation/message
+GET    /api/conversations
+GET    /api/conversations/{id}/messages
+GET    /api/memory
+POST   /api/memory
 DELETE /api/memory/{id}
-GET  /api/reminders
-POST /api/reminders
-GET  /api/audit
-GET  /api/permissions
-POST /api/actions/{id}/approve
-POST /api/actions/{id}/deny
+GET    /api/reminders
+POST   /api/reminders
+POST   /api/reminders/{id}/complete
+GET    /api/audit
+GET    /api/permissions
+GET    /api/actions
+POST   /api/actions/{id}/approve
+POST   /api/actions/{id}/deny
 ```
+
+## Next Milestone: Trusted Personal Gateway
+
+1. Owner authentication and device enrollment.
+2. Application-level encryption for personal records and secrets.
+3. Database migrations and encrypted backup/export.
+4. SignalR response streaming and richer conversation controls.
+5. Tool registry with scoped credentials and revocable grants.
+6. Calendar, notes, weather, and task connectors in read/prepare modes.
+7. Structured telemetry that excludes personal content by default.
 
 ## Build Rule
 
-Every new capability must pass through:
+Every capability must pass through:
 
 ```text
-Intent -> Permission Check -> Risk Level -> User Confirmation if Needed -> Audit Event
+Intent -> Permission Check -> Risk Level -> Confirmation if Needed -> Audit Event
 ```
+
+Models may suggest and explain. Only VINAN's deterministic tool layer may authorize or execute an external action.

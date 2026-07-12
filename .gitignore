@@ -7,4 +7,5 @@ obj/
 *.db
 *.db-shm
 *.db-wal
+.data/
 appsettings.Local.json

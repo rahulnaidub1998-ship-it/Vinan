@@ -15,6 +15,8 @@ const state = {
   reminders: JSON.parse(localStorage.getItem("vinan.reminders") || "[]"),
   notes: JSON.parse(localStorage.getItem("vinan.notes") || "[]"),
   pendingActions: JSON.parse(localStorage.getItem("vinan.pendingActions") || "[]"),
+  conversationId: localStorage.getItem("vinan.conversationId") || null,
+  conversations: [],
   permissions: {
     Calendar: "Read",
     Gmail: "Prepare",
@@ -30,7 +32,7 @@ const seedMessages = [
   {
     role: "vinan",
     text:
-      "VINAN is online in local prototype mode. I can hold approved memory, create local reminders, capture notes, and pause risky actions for approval.",
+      "VINAN is online. I can preserve approved memory and conversation history, create reminders, capture notes, and pause risky actions for approval.",
   },
   {
     role: "vinan",
@@ -45,6 +47,8 @@ function save() {
   localStorage.setItem("vinan.reminders", JSON.stringify(state.reminders));
   localStorage.setItem("vinan.notes", JSON.stringify(state.notes));
   localStorage.setItem("vinan.pendingActions", JSON.stringify(state.pendingActions));
+  if (state.conversationId) localStorage.setItem("vinan.conversationId", state.conversationId);
+  else localStorage.removeItem("vinan.conversationId");
 }
 
 function addAudit(action, level = "Level 1") {
@@ -81,29 +85,36 @@ function memoryText(memory) {
 }
 
 async function checkApi() {
+  let health = null;
   try {
     const response = await fetch(`${API_BASE}/api/health`);
     apiOnline = response.ok;
+    if (response.ok) health = await response.json();
   } catch {
     apiOnline = false;
   }
 
   const status = document.querySelector("#apiStatus");
-  if (status) status.textContent = apiOnline ? "API connected" : "Local prototype";
+  if (status) {
+    status.textContent = apiOnline
+      ? `${health?.storage || "API"} · ${health?.modelProvider || "connected"}`
+      : "Local prototype";
+  }
   if (apiOnline) await hydrateFromApi();
 }
 
 async function hydrateFromApi() {
   try {
-    const [memoryResponse, reminderResponse, actionResponse, permissionResponse, auditResponse] = await Promise.all([
+    const [memoryResponse, reminderResponse, actionResponse, permissionResponse, auditResponse, conversationResponse] = await Promise.all([
       fetch(`${API_BASE}/api/memory`),
       fetch(`${API_BASE}/api/reminders`),
       fetch(`${API_BASE}/api/actions`),
       fetch(`${API_BASE}/api/permissions`),
       fetch(`${API_BASE}/api/audit`),
+      fetch(`${API_BASE}/api/conversations`),
     ]);
 
-    if (![memoryResponse, reminderResponse, actionResponse, permissionResponse, auditResponse].every((response) => response.ok)) {
+    if (![memoryResponse, reminderResponse, actionResponse, permissionResponse, auditResponse, conversationResponse].every((response) => response.ok)) {
       return;
     }
 
@@ -122,6 +133,7 @@ async function hydrateFromApi() {
       level: formatRiskLabel(event.riskLevel),
       time: new Date(event.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     }));
+    state.conversations = await conversationResponse.json();
 
     save();
     renderMemory();
@@ -346,11 +358,12 @@ async function responseForRemote(input) {
     const response = await fetch(`${API_BASE}/api/conversation/message`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: input }),
+      body: JSON.stringify({ message: input, conversationId: state.conversationId }),
     });
     if (!response.ok) return null;
 
     const result = await response.json();
+    if (result.conversationId) state.conversationId = result.conversationId;
     if (result.memory?.text) {
       state.memories.unshift(result.memory);
       state.memories = state.memories.filter(
@@ -376,7 +389,7 @@ async function responseForRemote(input) {
       });
       renderPendingAction();
     }
-    await syncAuditFromApi();
+    await Promise.all([syncAuditFromApi(), syncConversationsFromApi()]);
     save();
     return result.reply;
   } catch {
@@ -401,6 +414,31 @@ async function syncAuditFromApi() {
   } catch {
     apiOnline = false;
   }
+}
+
+async function syncConversationsFromApi() {
+  try {
+    const response = await fetch(`${API_BASE}/api/conversations`);
+    if (!response.ok) return;
+    state.conversations = await response.json();
+    renderView(document.querySelector(".nav-item.active")?.dataset.view || "overview");
+  } catch {
+    apiOnline = false;
+  }
+}
+
+async function loadConversation(conversationId) {
+  if (!apiOnline) return;
+  const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/messages`);
+  if (!response.ok) return;
+
+  const messages = await response.json();
+  state.conversationId = conversationId;
+  chatLog.innerHTML = "";
+  messages.forEach((message) => addMessage(message.role === "assistant" ? "vinan" : "user", message.text));
+  if (!messages.length) seedMessages.forEach((message) => addMessage(message.role, message.text));
+  save();
+  chatLog.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function clearAllMemories() {
@@ -483,6 +521,10 @@ function renderView(view) {
         <div class="metric-card"><strong>${state.reminders.length}</strong><span>Local reminders</span></div>
         <div class="metric-card"><strong>${state.pendingActions.length}</strong><span>Pending approvals</span></div>
       </div>
+      <section class="module recent-conversations">
+        <div class="module-header"><div><p class="panel-label">History</p><h3>Recent Conversations</h3></div></div>
+        <div class="conversation-list">${renderConversationsHtml()}</div>
+      </section>
     `,
     memory: `
       <section class="module">
@@ -562,6 +604,24 @@ function renderNotesHtml() {
     .join("");
 }
 
+function renderConversationsHtml() {
+  if (!state.conversations.length) {
+    return '<div class="conversation-item"><span class="item-meta">No saved conversations yet.</span></div>';
+  }
+
+  return state.conversations
+    .slice(0, 8)
+    .map(
+      (conversation) => `
+        <button class="conversation-item" type="button" data-conversation-id="${conversation.id}">
+          <strong>${escapeHtml(conversation.title)}</strong>
+          <span>${new Date(conversation.updatedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
+        </button>
+      `,
+    )
+    .join("");
+}
+
 function wireDynamicViewControls() {
   const noteForm = document.querySelector("#noteForm");
   if (noteForm) {
@@ -582,6 +642,10 @@ function wireDynamicViewControls() {
       addAudit("Note deleted", "Level 2");
       renderView("automation");
     });
+  });
+
+  document.querySelectorAll("[data-conversation-id]").forEach((button) => {
+    button.addEventListener("click", () => void loadConversation(button.dataset.conversationId));
   });
 }
 
@@ -640,8 +704,10 @@ composer.addEventListener("submit", (event) => {
 
 document.querySelector("#clearChat").addEventListener("click", () => {
   chatLog.innerHTML = "";
+  state.conversationId = null;
   seedMessages.forEach((message) => addMessage(message.role, message.text));
   addAudit("Conversation cleared", "Level 1");
+  save();
 });
 
 document.querySelector("#forgetAll").addEventListener("click", () => {
