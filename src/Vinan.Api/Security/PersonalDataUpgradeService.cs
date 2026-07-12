@@ -17,6 +17,9 @@ public sealed class PersonalDataUpgradeService
         ("ConversationMessages", "Text"),
         ("OwnerProfiles", "DisplayName"),
         ("DeviceEnrollments", "Name"),
+        ("Notes", "Text"),
+        ("Tasks", "Title"),
+        ("ProviderCredentials", "Secret"),
     };
 
     private readonly VinanDbContext _database;
@@ -46,6 +49,11 @@ public sealed class PersonalDataUpgradeService
         {
             foreach (var (table, column) in ProtectedColumns)
             {
+                if (!await TableExistsAsync(connection, table, cancellationToken))
+                {
+                    continue;
+                }
+
                 var legacyRows = new List<(string Id, string Value)>();
                 await using (var select = connection.CreateCommand())
                 {
@@ -84,5 +92,19 @@ public sealed class PersonalDataUpgradeService
                 await connection.CloseAsync();
             }
         }
+    }
+
+    private static async Task<bool> TableExistsAsync(
+        System.Data.Common.DbConnection connection,
+        string table,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = $table;";
+        var parameter = command.CreateParameter();
+        parameter.ParameterName = "$table";
+        parameter.Value = table;
+        command.Parameters.Add(parameter);
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken)) > 0;
     }
 }

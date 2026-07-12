@@ -20,6 +20,9 @@ const state = {
   audit: [],
   reminders: [],
   notes: [],
+  tasks: [],
+  tools: [],
+  ai: null,
   pendingActions: [],
   conversationId: localStorage.getItem("vinan.conversationId") || null,
   conversations: [],
@@ -85,12 +88,12 @@ const seedMessages = [
   {
     role: "vinan",
     text:
-      "VINAN is online. I can preserve approved memory and conversation history, create reminders, capture notes, and pause risky actions for approval.",
+      "VINAN is online. I can stream contextual conversations and operate encrypted memory, notes, tasks, reminders, live weather, calculations, and approval checkpoints.",
   },
   {
     role: "vinan",
     text:
-      "Try: Remember that I prefer concise answers. Create a reminder for tomorrow. Note my passport renewal is important. Or calculate 42 * 12.",
+      "Try: weather in San Francisco, create an urgent task for tomorrow, prioritize my tasks, or remember that I prefer concise answers.",
   },
 ];
 
@@ -104,6 +107,9 @@ function clearPrivateView() {
   state.audit = [];
   state.reminders = [];
   state.notes = [];
+  state.tasks = [];
+  state.tools = [];
+  state.ai = null;
   state.pendingActions = [];
   state.conversations = [];
   state.devices = [];
@@ -143,6 +149,7 @@ function addMessage(role, text) {
   chatLog.appendChild(item);
   chatLog.scrollTop = chatLog.scrollHeight;
   if (role === "vinan" && voiceRepliesEnabled) speak(text);
+  return item;
 }
 
 function memoryText(memory) {
@@ -163,14 +170,14 @@ async function checkApi() {
   if (status) {
     status.textContent = apiOnline
       ? `${health?.storage || "API"} · ${health?.modelProvider || "connected"}`
-      : "Local prototype";
+      : "Offline";
   }
   if (apiOnline) await hydrateFromApi();
 }
 
 async function hydrateFromApi() {
   try {
-    const [memoryResponse, reminderResponse, actionResponse, permissionResponse, auditResponse, conversationResponse, deviceResponse] = await Promise.all([
+    const [memoryResponse, reminderResponse, actionResponse, permissionResponse, auditResponse, conversationResponse, deviceResponse, noteResponse, taskResponse, toolResponse, aiResponse] = await Promise.all([
       apiFetch("/api/memory"),
       apiFetch("/api/reminders"),
       apiFetch("/api/actions"),
@@ -178,10 +185,15 @@ async function hydrateFromApi() {
       apiFetch("/api/audit"),
       apiFetch("/api/conversations"),
       apiFetch("/api/devices"),
+      apiFetch("/api/notes"),
+      apiFetch("/api/tasks"),
+      apiFetch("/api/tools"),
+      apiFetch("/api/ai/status"),
     ]);
 
-    if (![memoryResponse, reminderResponse, actionResponse, permissionResponse, auditResponse, conversationResponse, deviceResponse].every((response) => response.ok)) {
-      if ([memoryResponse, reminderResponse, actionResponse, permissionResponse, auditResponse, conversationResponse, deviceResponse].some((response) => response.status === 401)) {
+    const responses = [memoryResponse, reminderResponse, actionResponse, permissionResponse, auditResponse, conversationResponse, deviceResponse, noteResponse, taskResponse, toolResponse, aiResponse];
+    if (!responses.every((response) => response.ok)) {
+      if (responses.some((response) => response.status === 401)) {
         await initializeAuth();
       }
       return;
@@ -204,6 +216,10 @@ async function hydrateFromApi() {
     }));
     state.conversations = await conversationResponse.json();
     state.devices = await deviceResponse.json();
+    state.notes = await noteResponse.json();
+    state.tasks = await taskResponse.json();
+    state.tools = await toolResponse.json();
+    state.ai = await aiResponse.json();
 
     save();
     renderMemory();
@@ -212,7 +228,7 @@ async function hydrateFromApi() {
     renderView(document.querySelector(".nav-item.active")?.dataset.view || "overview");
   } catch {
     apiOnline = false;
-    document.querySelector("#apiStatus").textContent = "Local prototype";
+    document.querySelector("#apiStatus").textContent = "Offline";
   }
 }
 
@@ -299,174 +315,75 @@ function renderPendingAction() {
   risk.textContent = action.level;
 }
 
-function addReminder(title, when = "Scheduled locally") {
-  state.reminders.unshift({
-    id: crypto.randomUUID?.() || String(Date.now()),
-    title,
-    when,
-    createdAt: new Date().toISOString(),
-  });
-  state.reminders = state.reminders.slice(0, 12);
-  renderReminders();
-  addAudit("Reminder created", "Level 2");
-  save();
-}
-
-function addNote(text) {
-  state.notes.unshift({
-    id: crypto.randomUUID?.() || String(Date.now()),
-    text,
-    createdAt: new Date().toISOString(),
-  });
-  state.notes = state.notes.slice(0, 20);
-  addAudit("Note captured", "Level 2");
-  save();
-}
-
-function queueAction(summary, level = "Level 3") {
-  state.pendingActions.unshift({
-    id: crypto.randomUUID?.() || String(Date.now()),
-    summary,
-    level,
-    createdAt: new Date().toISOString(),
-  });
-  state.pendingActions = state.pendingActions.slice(0, 6);
-  renderPendingAction();
-  addAudit("Action queued for approval", level);
-  save();
-}
-
-function responseFor(input) {
-  const text = input.trim();
-  const lower = text.toLowerCase();
-
-  if (lower.includes("remember")) {
-    const memory = text.replace(/^(vinan,?\s*)?remember\s*(that)?\s*/i, "").trim();
-    if (memory) {
-      state.memories.unshift({
-        id: crypto.randomUUID?.() || String(Date.now()),
-        text: memory,
-        category: "Preference",
-        createdAt: new Date().toISOString(),
-      });
-      state.memories = state.memories.filter(
-        (item, index, items) => items.findIndex((candidate) => memoryText(candidate) === memoryText(item)) === index,
-      ).slice(0, 10);
-      renderMemory();
-      addAudit("Approved memory stored", "Level 2");
-      return `I saved this as approved memory: ${memory}`;
-    }
+function applyConversationResult(result, messageElement) {
+  if (result.conversationId) state.conversationId = result.conversationId;
+  if (result.memory?.text) {
+    state.memories.unshift(result.memory);
+    state.memories = state.memories.filter(
+      (item, index, items) => items.findIndex((candidate) => memoryText(candidate) === memoryText(item)) === index,
+    ).slice(0, 30);
+    renderMemory();
   }
-
-  if (lower.includes("what do you know about me")) {
-    addAudit("Memory reviewed", "Level 1");
-    if (!state.memories.length) return "I do not have approved long-term memories yet.";
-    return `Here is what I currently remember: ${state.memories.map(memoryText).join("; ")}.`;
+  if (result.reminder?.title) {
+    state.reminders.unshift(result.reminder);
+    renderReminders();
   }
-
-  if (lower.includes("forget") || lower.includes("delete")) {
-    return "Use the memory panel to delete a specific memory, or delete all stored prototype memory.";
-  }
-
-  if (lower.includes("reminder")) {
-    const title = text.replace(/^(vinan,?\s*)?(create|add|set)?\s*a?\s*reminder\s*(to|for)?\s*/i, "").trim() || text;
-    const when = lower.includes("tomorrow") ? "Tomorrow" : lower.includes("today") ? "Today" : "Scheduled locally";
-    addReminder(title, when);
-    return `I created a local reminder: ${title}.`;
-  }
-
-  if (lower.startsWith("note ") || lower.includes("take a note") || lower.includes("write this down")) {
-    const note = text
-      .replace(/^(vinan,?\s*)?(take a note|note|write this down)\s*:?\s*/i, "")
-      .trim();
-    if (note) {
-      addNote(note);
-      return `I captured this note: ${note}`;
-    }
-  }
-
-  if (lower.includes("transfer") || lower.includes("buy ") || lower.includes("deploy") || lower.includes("unlock")) {
-    queueAction(`High-risk request blocked pending strong confirmation: "${text}".`, "Level 4");
-    return "That is a high-risk action. I queued it for strong confirmation and will not execute it automatically.";
-  }
-
-  if (lower.includes("calendar") || lower.includes("meeting") || lower.includes("send") || lower.includes("email")) {
-    queueAction(`Prepare action from request: "${text}". Confirmation is required before execution.`, "Level 3");
-    return "I prepared that as a pending action and paused for confirmation.";
-  }
-
-  if (lower.includes("time") || lower.includes("date")) {
-    addAudit("Date and time checked", "Level 1");
-    return `It is ${new Date().toLocaleString([], { dateStyle: "full", timeStyle: "short" })}.`;
-  }
-
-  if (lower.startsWith("calculate ") || lower.startsWith("calc ")) {
-    const expression = text.replace(/^(calculate|calc)\s*/i, "");
-    const result = calculate(expression);
-    addAudit("Calculator used", "Level 1");
-    return result === null ? "I can calculate basic arithmetic expressions only in this prototype." : `${expression} = ${result}`;
-  }
-
-  if (lower.includes("permission") || lower.includes("access")) {
-    document.querySelector('[data-view="permissions"]').click();
-    return "Here are the current permission levels.";
-  }
-
-  if (lower.includes("roadmap") || lower.includes("build")) {
-    document.querySelector('[data-view="roadmap"]').click();
-    return "I opened the build roadmap so we can keep the long vision connected to the next milestone.";
-  }
-
-  addAudit("Conversation response generated", "Level 1");
-  return "I can help shape that into a plan, a memory, a reminder, a note, or an approval-based action. Sensitive work stays gated.";
-}
-
-async function responseForRemote(input) {
-  if (!apiOnline) return null;
-
-  try {
-    const response = await apiFetch("/api/conversation/message", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: input, conversationId: state.conversationId }),
+  if (result.note?.text) state.notes.unshift(result.note);
+  if (result.task?.title) state.tasks.unshift(result.task);
+  if (result.pendingAction?.summary) {
+    state.pendingActions.unshift({
+      ...result.pendingAction,
+      level: formatRiskLabel(result.pendingAction.riskLevel),
     });
-    if (!response.ok) return null;
-
-    const result = await response.json();
-    if (result.conversationId) state.conversationId = result.conversationId;
-    if (result.memory?.text) {
-      state.memories.unshift(result.memory);
-      state.memories = state.memories.filter(
-        (item, index, items) => items.findIndex((candidate) => memoryText(candidate) === memoryText(item)) === index,
-      ).slice(0, 10);
-      renderMemory();
-    }
-    if (result.reminder?.title) {
-      state.reminders.unshift({
-        id: result.reminder.id,
-        title: result.reminder.title,
-        when: result.reminder.when,
-        createdAt: result.reminder.createdAt,
-      });
-      renderReminders();
-    }
-    if (result.pendingAction?.summary) {
-      state.pendingActions.unshift({
-        id: result.pendingAction.id,
-        summary: result.pendingAction.summary,
-        level: formatRiskLabel(result.pendingAction.riskLevel),
-        createdAt: result.pendingAction.createdAt,
-      });
-      renderPendingAction();
-    }
-    await Promise.all([syncAuditFromApi(), syncConversationsFromApi()]);
-    save();
-    return result.reply;
-  } catch {
-    apiOnline = false;
-    document.querySelector("#apiStatus").textContent = "Local prototype";
-    return null;
+    renderPendingAction();
   }
+  if (result.toolExecutions?.length && messageElement) {
+    messageElement.title = result.toolExecutions.map((tool) => `${tool.name}: ${tool.summary}`).join("\n");
+    messageElement.dataset.provider = result.provider;
+  }
+  save();
+}
+
+async function responseForRemote(input, messageElement) {
+  if (!apiOnline) throw new Error("VINAN is offline.");
+
+  const response = await apiFetch("/api/conversation/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
+    body: JSON.stringify({ message: input, conversationId: state.conversationId }),
+  });
+  if (!response.ok || !response.body) throw new Error("VINAN could not start the response.");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let completed = null;
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line);
+      if (event.type === "delta" && event.delta) {
+        messageElement.textContent += event.delta;
+        chatLog.scrollTop = chatLog.scrollHeight;
+      } else if (event.type === "completed" && event.response) {
+        completed = event.response;
+      } else if (event.type === "error") {
+        throw new Error(event.error || "VINAN could not complete the response.");
+      }
+    }
+    if (done) break;
+  }
+
+  if (!completed) throw new Error("VINAN's response ended before completion.");
+  messageElement.textContent = completed.reply;
+  applyConversationResult(completed, messageElement);
+  if (voiceRepliesEnabled) speak(completed.reply);
+  await Promise.all([syncAuditFromApi(), syncConversationsFromApi()]);
+  return completed;
 }
 
 async function syncAuditFromApi() {
@@ -526,7 +443,7 @@ async function clearAllMemories() {
   state.memories = [];
   renderMemory();
   if (apiOnline) await syncAuditFromApi();
-  else addAudit("All prototype memory deleted", "Level 2");
+  else addAudit("All memory deleted", "Level 2");
   save();
 }
 
@@ -595,7 +512,8 @@ function renderView(view) {
     overview: `
       <div class="view-grid">
         <div class="metric-card"><strong>${state.memories.length}</strong><span>Approved memories</span></div>
-        <div class="metric-card"><strong>${state.reminders.length}</strong><span>Local reminders</span></div>
+        <div class="metric-card"><strong>${state.tasks.length}</strong><span>Open tasks</span></div>
+        <div class="metric-card"><strong>${state.tools.filter((tool) => tool.status === "Ready").length}</strong><span>Ready tools</span></div>
         <div class="metric-card"><strong>${state.pendingActions.length}</strong><span>Pending approvals</span></div>
       </div>
       <section class="module recent-conversations">
@@ -627,21 +545,53 @@ function renderView(view) {
         <div class="module-header"><div><p class="panel-label">Security</p><h3>Enrolled Devices</h3></div></div>
         <div class="device-list">${renderDevicesHtml()}</div>
       </section>
+      <section class="module">
+        <div class="module-header"><div><p class="panel-label">Registry</p><h3>Tool Readiness</h3></div></div>
+        <div class="tool-list">${renderToolsHtml()}</div>
+      </section>
+    `,
+    intelligence: `
+      <section class="module intelligence-module">
+        <div class="module-header">
+          <div><p class="panel-label">Reasoning Provider</p><h3>${state.ai?.configured ? escapeHtml(state.ai.model) : "Local Intelligence"}</h3></div>
+          <span class="select-pill ${state.ai?.configured ? "ready" : ""}">${state.ai?.configured ? "Connected" : "Local"}</span>
+        </div>
+        <form class="provider-form" id="providerForm">
+          <label><span>OpenAI API key</span><input id="providerKey" type="password" autocomplete="off" placeholder="sk-..." minlength="20" required /></label>
+          <label><span>Model</span><select id="providerModel">
+            <option value="gpt-5.6-sol" ${state.ai?.model === "gpt-5.6-sol" ? "selected" : ""}>GPT-5.6 Sol</option>
+            <option value="gpt-5.6-terra" ${state.ai?.model === "gpt-5.6-terra" ? "selected" : ""}>GPT-5.6 Terra</option>
+            <option value="gpt-5.6-luna" ${state.ai?.model === "gpt-5.6-luna" ? "selected" : ""}>GPT-5.6 Luna</option>
+          </select></label>
+          <div class="form-actions">
+            ${state.ai?.configured ? '<button class="secondary-action" id="disconnectProvider" type="button">Disconnect</button>' : ""}
+            <button class="primary-action" type="submit">${state.ai?.configured ? "Replace Key" : "Connect"}</button>
+          </div>
+          <p class="form-status" id="providerStatus" role="status"></p>
+        </form>
+      </section>
+      <section class="module">
+        <div class="module-header"><div><p class="panel-label">Adaptive Systems</p><h3>ML and Optimization</h3></div></div>
+        <div class="tool-list">${renderToolsHtml(["memory", "task-optimizer", "quantum-optimizer"])}</div>
+      </section>
     `,
     automation: `
       <section class="module">
-        <div class="module-header"><div><p class="panel-label">Automation</p><h3>Monitors and Workflows</h3></div></div>
-        <div class="roadmap-grid">
-          <div class="roadmap-item"><strong>Daily Briefing</strong><br><span>Calendar, priority tasks, unread signals.</span></div>
-          <div class="roadmap-item"><strong>Follow-up Watch</strong><br><span>Unanswered messages and deadlines.</span></div>
-          <div class="roadmap-item"><strong>Approval Queue</strong><br><span>External actions wait for confirmation.</span></div>
-          <div class="roadmap-item"><strong>Quiet Hours</strong><br><span>Notification rules by time and priority.</span></div>
-        </div>
+        <div class="module-header"><div><p class="panel-label">Tasks</p><h3>Priority Queue</h3></div></div>
+        <form class="quick-form task-form" id="taskForm">
+          <input id="taskInput" maxlength="2000" placeholder="Add a task" required />
+          <input id="taskDue" type="datetime-local" />
+          <select id="taskPriority" aria-label="Task priority">
+            <option value="1">Urgent</option><option value="2">High</option><option value="3" selected>Normal</option><option value="4">Low</option><option value="5">Someday</option>
+          </select>
+          <button type="submit">Add Task</button>
+        </form>
+        <div class="task-list">${renderTasksHtml()}</div>
       </section>
       <section class="module">
-        <div class="module-header"><div><p class="panel-label">Notes</p><h3>Scratch Memory</h3></div></div>
+        <div class="module-header"><div><p class="panel-label">Notes</p><h3>Private Notes</h3></div></div>
         <form class="quick-form" id="noteForm">
-          <textarea id="noteInput" placeholder="Capture a local note for this prototype"></textarea>
+          <textarea id="noteInput" maxlength="10000" placeholder="Capture an encrypted note"></textarea>
           <button type="submit">Save Note</button>
         </form>
         <div class="note-list">${renderNotesHtml()}</div>
@@ -672,13 +622,42 @@ function renderView(view) {
 }
 
 function renderNotesHtml() {
-  if (!state.notes.length) return '<div class="note-item"><span class="item-meta">No local notes yet.</span></div>';
+  if (!state.notes.length) return '<div class="note-item"><span class="item-meta">No notes yet.</span></div>';
   return state.notes
     .map(
       (note) => `
         <div class="note-item">
           <header><strong>${new Date(note.createdAt).toLocaleDateString()}</strong><button type="button" data-note-id="${note.id}">Delete</button></header>
           <span>${escapeHtml(note.text)}</span>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function renderTasksHtml() {
+  if (!state.tasks.length) return '<div class="task-item"><span class="item-meta">No open tasks.</span></div>';
+  return state.tasks
+    .map(
+      (task) => `
+        <div class="task-item">
+          <div><strong>${escapeHtml(task.title)}</strong><br><span>${task.dueAt ? new Date(task.dueAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "No due date"} · Priority ${task.priority}</span></div>
+          <button class="text-button" type="button" data-complete-task="${task.id}">Complete</button>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function renderToolsHtml(filterIds = null) {
+  const tools = filterIds ? state.tools.filter((tool) => filterIds.includes(tool.id)) : state.tools;
+  if (!tools.length) return '<div class="tool-item"><span class="item-meta">Tool registry unavailable.</span></div>';
+  return tools
+    .map(
+      (tool) => `
+        <div class="tool-item">
+          <div><strong>${escapeHtml(tool.name)}</strong><br><span>${escapeHtml(tool.provider)} · ${escapeHtml(tool.description)}</span></div>
+          <span class="select-pill ${tool.status === "Ready" ? "ready" : ""}">${escapeHtml(tool.status)}</span>
         </div>
       `,
     )
@@ -726,23 +705,94 @@ function renderDevicesHtml() {
 function wireDynamicViewControls() {
   const noteForm = document.querySelector("#noteForm");
   if (noteForm) {
-    noteForm.addEventListener("submit", (event) => {
+    noteForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const input = document.querySelector("#noteInput");
       const value = input.value.trim();
       if (!value) return;
-      addNote(value);
+      const response = await apiFetch("/api/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: value }),
+      });
+      if (!response.ok) return;
+      state.notes.unshift(await response.json());
       input.value = "";
+      await syncAuditFromApi();
       renderView("automation");
     });
   }
 
   document.querySelectorAll("[data-note-id]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
+      const response = await apiFetch(`/api/notes/${button.dataset.noteId}`, { method: "DELETE" });
+      if (!response.ok) return;
       state.notes = state.notes.filter((note) => note.id !== button.dataset.noteId);
-      addAudit("Note deleted", "Level 2");
+      await syncAuditFromApi();
       renderView("automation");
     });
+  });
+
+  const taskForm = document.querySelector("#taskForm");
+  if (taskForm) {
+    taskForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const title = document.querySelector("#taskInput").value.trim();
+      if (!title) return;
+      const dueValue = document.querySelector("#taskDue").value;
+      const response = await apiFetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          dueAt: dueValue ? new Date(dueValue).toISOString() : null,
+          priority: Number(document.querySelector("#taskPriority").value),
+        }),
+      });
+      if (!response.ok) return;
+      state.tasks.push(await response.json());
+      await syncAuditFromApi();
+      renderView("automation");
+    });
+  }
+
+  document.querySelectorAll("[data-complete-task]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const response = await apiFetch(`/api/tasks/${button.dataset.completeTask}/complete`, { method: "POST" });
+      if (!response.ok) return;
+      state.tasks = state.tasks.filter((task) => task.id !== button.dataset.completeTask);
+      await syncAuditFromApi();
+      renderView("automation");
+    });
+  });
+
+  const providerForm = document.querySelector("#providerForm");
+  if (providerForm) {
+    providerForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const status = document.querySelector("#providerStatus");
+      status.textContent = "Connecting...";
+      const response = await apiFetch("/api/ai/provider", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: document.querySelector("#providerKey").value, model: document.querySelector("#providerModel").value }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: "Connection failed." }));
+        status.textContent = error.error || "Connection failed.";
+        return;
+      }
+      document.querySelector("#providerKey").value = "";
+      await hydrateFromApi();
+      renderView("intelligence");
+    });
+  }
+
+  document.querySelector("#disconnectProvider")?.addEventListener("click", async () => {
+    const response = await apiFetch("/api/ai/provider", { method: "DELETE" });
+    if (!response.ok) return;
+    await hydrateFromApi();
+    renderView("intelligence");
   });
 
   document.querySelectorAll("[data-conversation-id]").forEach((button) => {
@@ -768,16 +818,6 @@ function formatRiskLabel(level) {
   return String(level).replace(/^Level(\d)$/i, "Level $1");
 }
 
-function calculate(expression) {
-  if (!/^[\d\s().+\-*/%]+$/.test(expression)) return null;
-  try {
-    const result = Function(`"use strict"; return (${expression});`)();
-    return Number.isFinite(result) ? result : null;
-  } catch {
-    return null;
-  }
-}
-
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -795,16 +835,29 @@ document.querySelectorAll(".nav-item").forEach((button) => {
   });
 });
 
-composer.addEventListener("submit", (event) => {
+composer.addEventListener("submit", async (event) => {
   event.preventDefault();
   const value = promptInput.value.trim();
   if (!value) return;
   addMessage("user", value);
   promptInput.value = "";
-  window.setTimeout(async () => {
-    const remoteReply = await responseForRemote(value);
-    addMessage("vinan", remoteReply || responseFor(value));
-  }, 220);
+  const assistantMessage = addMessage("vinan", "");
+  assistantMessage.classList.add("streaming");
+  const submitButton = composer.querySelector('button[type="submit"]');
+  promptInput.disabled = true;
+  submitButton.disabled = true;
+  try {
+    await responseForRemote(value, assistantMessage);
+  } catch {
+    assistantMessage.textContent = apiOnline
+      ? "I could not complete that response. Your request was not treated as an executed action."
+      : "VINAN is offline. Start the private API and try again.";
+  } finally {
+    assistantMessage.classList.remove("streaming");
+    promptInput.disabled = false;
+    submitButton.disabled = false;
+    promptInput.focus();
+  }
 });
 
 document.querySelector("#clearChat").addEventListener("click", () => {
@@ -894,6 +947,7 @@ document.querySelector("#exportButton").addEventListener("click", () => {
           memories: state.memories,
           reminders: state.reminders,
           notes: state.notes,
+          tasks: state.tasks,
           pendingActions: state.pendingActions,
           audit: state.audit,
         },

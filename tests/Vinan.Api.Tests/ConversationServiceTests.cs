@@ -47,6 +47,51 @@ public sealed class ConversationServiceTests
         Assert.Equal(1, fixture.Model.CallCount);
     }
 
+    [Fact]
+    public async Task CarriesPriorConversationTurnsIntoTheModel()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var first = await fixture.Service.HandleAsync(new ConversationRequest("Help me plan my week"));
+
+        await fixture.Service.HandleAsync(new ConversationRequest("What did I just ask?", first.ConversationId));
+
+        Assert.Equal(2, fixture.Model.LastHistory.Count);
+        Assert.Equal("Help me plan my week", fixture.Model.LastHistory.First().Text);
+        Assert.Equal("Model response", fixture.Model.LastHistory.Last().Text);
+    }
+
+    [Fact]
+    public async Task StreamsAndPersistsAssistantResponse()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var events = new List<ConversationStreamEvent>();
+
+        await foreach (var item in fixture.Service.HandleStreamAsync(new ConversationRequest("Think through this")))
+        {
+            events.Add(item);
+        }
+
+        Assert.Equal("Model response", string.Concat(events.Where(item => item.Type == "delta").Select(item => item.Delta)));
+        Assert.Equal("Model response", events.Single(item => item.Type == "completed").Response?.Reply);
+        Assert.Equal(2, await fixture.Database.ConversationMessages.CountAsync());
+    }
+
+    [Fact]
+    public async Task NaturalLanguageCreatesEncryptedNoteAndTaskRecords()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+
+        var note = await fixture.Service.HandleAsync(new ConversationRequest("Note that the renewal code is private"));
+        var task = await fixture.Service.HandleAsync(new ConversationRequest("Create an urgent task tomorrow renew passport"));
+
+        Assert.Equal("the renewal code is private", note.Note?.Text);
+        Assert.Equal("renew passport", task.Task?.Title);
+        Assert.Equal(1, task.Task?.Priority);
+        Assert.Single(await fixture.Database.Notes.ToListAsync());
+        Assert.Single(await fixture.Database.Tasks.ToListAsync());
+        Assert.Equal(0, fixture.Model.CallCount);
+    }
+
     private sealed class ConversationFixture : IAsyncDisposable
     {
         private ConversationFixture(
@@ -76,7 +121,13 @@ public sealed class ConversationServiceTests
             var database = new VinanDbContext(options, new PersonalDataProtector(new EphemeralDataProtectionProvider()));
             await database.Database.EnsureCreatedAsync();
             var model = new FakeAssistantModel();
-            var service = new ConversationService(database, model, new AuditService(database));
+            var service = new ConversationService(
+                database,
+                model,
+                new AuditService(database),
+                new MemoryRetrievalService(database),
+                new WeatherService(new HttpClient()),
+                new ClassicalTaskOptimizationEngine(database));
             return new ConversationFixture(connection, database, model, service);
         }
 
@@ -90,14 +141,30 @@ public sealed class ConversationServiceTests
     private sealed class FakeAssistantModel : IAssistantModel
     {
         public int CallCount { get; private set; }
+        public IReadOnlyCollection<ConversationTurn> LastHistory { get; private set; } = Array.Empty<ConversationTurn>();
 
         public Task<ModelReply> GenerateAsync(
             string message,
             IReadOnlyCollection<MemoryItem> memories,
+            IReadOnlyCollection<ConversationTurn> history,
             CancellationToken cancellationToken)
         {
             CallCount++;
+            LastHistory = history;
             return Task.FromResult(new ModelReply("Model response", "Test model"));
+        }
+
+        public async IAsyncEnumerable<ModelStreamChunk> StreamAsync(
+            string message,
+            IReadOnlyCollection<MemoryItem> memories,
+            IReadOnlyCollection<ConversationTurn> history,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            CallCount++;
+            LastHistory = history;
+            await Task.CompletedTask;
+            yield return new ModelStreamChunk("Model ", "Test model");
+            yield return new ModelStreamChunk("response", "Test model");
         }
     }
 }

@@ -26,15 +26,14 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background:
-    radial-gradient(circle at top left, rgba(45, 212, 191, 0.12), transparent 28rem),
-    linear-gradient(140deg, #10110f 0%, #1d1b18 48%, #151813 100%);
+  background: #121310;
   color: var(--text);
 }
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
@@ -403,6 +402,18 @@ h3 {
   border: 1px solid var(--line);
 }
 
+.message.streaming:empty::after {
+  content: "...";
+  color: var(--teal);
+  font-weight: 800;
+}
+
+button:disabled,
+input:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
 .composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -438,6 +449,8 @@ h3 {
 .note-list,
 .conversation-list,
 .device-list,
+.task-list,
+.tool-list,
 .permission-grid,
 .roadmap-grid,
 .audit-list {
@@ -450,6 +463,8 @@ h3 {
 .note-item,
 .conversation-item,
 .device-item,
+.task-item,
+.tool-item,
 .permission-item,
 .roadmap-item,
 .audit-item,
@@ -513,6 +528,24 @@ h3 {
   gap: 0.75rem;
 }
 
+.task-item,
+.tool-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid var(--line);
+  background: rgba(8, 9, 8, 0.33);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+}
+
+.task-item span,
+.tool-item span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 .device-item span {
   color: var(--muted);
   font-size: 0.82rem;
@@ -539,13 +572,57 @@ h3 {
 }
 
 .quick-form input,
-.quick-form textarea {
+.quick-form textarea,
+.quick-form select,
+.provider-form input,
+.provider-form select {
   min-width: 0;
   border-radius: var(--radius);
   border: 1px solid var(--line);
   background: rgba(8, 9, 8, 0.55);
   color: var(--text);
   padding: 0.7rem 0.85rem;
+}
+
+.task-form {
+  grid-template-columns: minmax(12rem, 1fr) minmax(11rem, auto) minmax(7rem, auto) auto;
+}
+
+.provider-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(11rem, 0.35fr);
+  gap: 0.85rem;
+}
+
+.provider-form label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.provider-form input,
+.provider-form select {
+  min-height: 2.75rem;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  grid-column: 1 / -1;
+}
+
+.form-status {
+  min-height: 1.2rem;
+  margin: 0;
+  color: var(--red);
+  grid-column: 1 / -1;
+}
+
+.select-pill.ready {
+  color: var(--green);
+  border-color: rgba(112, 224, 143, 0.45);
 }
 
 .quick-form textarea {
@@ -588,7 +665,7 @@ h3 {
 
 .view-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1rem;
 }
 
@@ -648,7 +725,7 @@ h3 {
   }
 
   .nav-list {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
   .nav-item {
@@ -689,6 +766,16 @@ h3 {
 
   .composer {
     grid-template-columns: 1fr;
+  }
+
+  .task-form,
+  .provider-form {
+    grid-template-columns: 1fr;
+  }
+
+  .form-actions,
+  .form-status {
+    grid-column: 1;
   }
 
   .message {

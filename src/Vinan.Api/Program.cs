@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -43,6 +44,11 @@ builder.Services.AddDbContext<VinanDbContext>(options => options.UseSqlite(conne
 builder.Services.AddScoped<IPasswordHasher<OwnerProfile>, PasswordHasher<OwnerProfile>>();
 builder.Services.AddScoped<OwnerAuthService>();
 builder.Services.AddScoped<PersonalDataUpgradeService>();
+builder.Services.AddScoped<AiConfigurationService>();
+builder.Services.AddScoped<MemoryRetrievalService>();
+builder.Services.AddScoped<ToolRegistryService>();
+builder.Services.AddScoped<ITaskOptimizationEngine, ClassicalTaskOptimizationEngine>();
+builder.Services.AddHttpClient<WeatherService>(client => client.Timeout = TimeSpan.FromSeconds(15));
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
     {
@@ -83,7 +89,7 @@ builder.Services.AddSingleton<LocalAssistantModel>();
 builder.Services.AddHttpClient<OpenAiAssistantModel>(client =>
 {
     client.BaseAddress = new Uri("https://api.openai.com/");
-    client.Timeout = TimeSpan.FromSeconds(45);
+    client.Timeout = TimeSpan.FromMinutes(2);
 });
 builder.Services.AddScoped<ModelRouter>();
 builder.Services.AddScoped<IAssistantModel>(services => services.GetRequiredService<ModelRouter>());
@@ -95,6 +101,8 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 });
 
 var app = builder.Build();
+var streamJsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+streamJsonOptions.Converters.Add(new JsonStringEnumConverter());
 
 await using (var scope = app.Services.CreateAsyncScope())
 {
@@ -133,11 +141,15 @@ app.Use(async (context, next) =>
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapGet("/api/health", (ModelRouter model) => Results.Ok(new HealthResponse(
-    "VINAN API online",
-    DateTimeOffset.UtcNow,
-    "SQLite",
-    model.ActiveProvider))).AllowAnonymous();
+app.MapGet("/api/health", async (ModelRouter model, CancellationToken cancellationToken) =>
+{
+    var ai = await model.GetStatusAsync(cancellationToken);
+    return Results.Ok(new HealthResponse(
+        "VINAN API online",
+        DateTimeOffset.UtcNow,
+        "SQLite",
+        ai.Configured ? $"{ai.Provider} / {ai.Model}" : "Local tools"));
+}).AllowAnonymous();
 
 var authEndpoints = app.MapGroup("/api/auth");
 authEndpoints.MapGet("/status", async (HttpContext context, OwnerAuthService auth, CancellationToken cancellationToken) =>
@@ -191,6 +203,34 @@ app.MapPost("/api/devices/{id:guid}/revoke", async (Guid id, HttpContext context
 
     return Results.NoContent();
 });
+
+var aiEndpoints = app.MapGroup("/api/ai");
+aiEndpoints.MapGet("/status", async (AiConfigurationService configuration, CancellationToken cancellationToken) =>
+    Results.Ok(await configuration.GetStatusAsync(cancellationToken)));
+aiEndpoints.MapPut("/provider", async (ConfigureAiRequest request, AiConfigurationService configuration, AuditService audit, VinanDbContext database, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var status = await configuration.ConfigureAsync(request, cancellationToken);
+        audit.Add("AI provider configured", RiskLevel.Level2);
+        await database.SaveChangesAsync(cancellationToken);
+        return Results.Ok(status);
+    }
+    catch (ArgumentException exception)
+    {
+        return Results.BadRequest(new { error = exception.Message });
+    }
+});
+aiEndpoints.MapDelete("/provider", async (AiConfigurationService configuration, AuditService audit, VinanDbContext database, CancellationToken cancellationToken) =>
+{
+    await configuration.ClearAsync(cancellationToken);
+    audit.Add("Saved AI provider credential removed", RiskLevel.Level2);
+    await database.SaveChangesAsync(cancellationToken);
+    return Results.NoContent();
+});
+
+app.MapGet("/api/tools", async (ToolRegistryService tools, CancellationToken cancellationToken) =>
+    Results.Ok(await tools.GetCapabilitiesAsync(cancellationToken)));
 
 var memory = app.MapGroup("/api/memory");
 memory.MapGet("/", async (VinanDbContext database, CancellationToken cancellationToken) =>
@@ -269,6 +309,77 @@ reminders.MapPost("/{id:guid}/complete", async (Guid id, VinanDbContext database
     return Results.Ok(reminder);
 });
 
+var notes = app.MapGroup("/api/notes");
+notes.MapGet("/", async (VinanDbContext database, CancellationToken cancellationToken) =>
+    await database.Notes.AsNoTracking().OrderByDescending(item => item.UpdatedAt).Take(100).ToListAsync(cancellationToken));
+notes.MapPost("/", async (CreateNoteRequest request, VinanDbContext database, AuditService audit, CancellationToken cancellationToken) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Text))
+    {
+        return Results.BadRequest(new { error = "Note text is required." });
+    }
+
+    var now = DateTimeOffset.UtcNow;
+    var note = new NoteItem { Id = Guid.NewGuid(), Text = request.Text.Trim(), CreatedAt = now, UpdatedAt = now };
+    database.Notes.Add(note);
+    audit.Add("Private note created", RiskLevel.Level2);
+    await database.SaveChangesAsync(cancellationToken);
+    return Results.Created($"/api/notes/{note.Id}", note);
+});
+notes.MapDelete("/{id:guid}", async (Guid id, VinanDbContext database, AuditService audit, CancellationToken cancellationToken) =>
+{
+    var note = await database.Notes.FindAsync(new object[] { id }, cancellationToken);
+    if (note is null)
+    {
+        return Results.NotFound();
+    }
+
+    database.Notes.Remove(note);
+    audit.Add("Private note deleted", RiskLevel.Level2);
+    await database.SaveChangesAsync(cancellationToken);
+    return Results.NoContent();
+});
+
+var tasks = app.MapGroup("/api/tasks");
+tasks.MapGet("/", async (VinanDbContext database, CancellationToken cancellationToken) =>
+    await database.Tasks.AsNoTracking().Where(item => !item.IsComplete)
+        .OrderBy(item => item.DueAt == null).ThenBy(item => item.DueAt).ThenBy(item => item.Priority)
+        .Take(100).ToListAsync(cancellationToken));
+tasks.MapPost("/", async (CreateTaskRequest request, VinanDbContext database, AuditService audit, CancellationToken cancellationToken) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Title) || request.Priority is < 1 or > 5)
+    {
+        return Results.BadRequest(new { error = "A task title and priority from 1 to 5 are required." });
+    }
+
+    var task = new TaskItem
+    {
+        Id = Guid.NewGuid(),
+        Title = request.Title.Trim(),
+        DueAt = request.DueAt,
+        Priority = request.Priority,
+        CreatedAt = DateTimeOffset.UtcNow,
+    };
+    database.Tasks.Add(task);
+    audit.Add("Task created", RiskLevel.Level2);
+    await database.SaveChangesAsync(cancellationToken);
+    return Results.Created($"/api/tasks/{task.Id}", task);
+});
+tasks.MapPost("/{id:guid}/complete", async (Guid id, VinanDbContext database, AuditService audit, CancellationToken cancellationToken) =>
+{
+    var task = await database.Tasks.FindAsync(new object[] { id }, cancellationToken);
+    if (task is null)
+    {
+        return Results.NotFound();
+    }
+
+    task.IsComplete = true;
+    task.CompletedAt = DateTimeOffset.UtcNow;
+    audit.Add("Task completed", RiskLevel.Level2);
+    await database.SaveChangesAsync(cancellationToken);
+    return Results.Ok(task);
+});
+
 app.MapGet("/api/permissions", () => VinanPermissions.Default);
 app.MapGet("/api/audit", async (VinanDbContext database, CancellationToken cancellationToken) =>
     await database.AuditEvents.AsNoTracking()
@@ -295,6 +406,36 @@ app.MapPost("/api/conversation/message", async (ConversationRequest request, Con
     }
 
     return Results.Ok(await conversation.HandleAsync(request, cancellationToken));
+});
+app.MapPost("/api/conversation/stream", async (ConversationRequest request, HttpContext context, ConversationService conversation, CancellationToken cancellationToken) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Message))
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await context.Response.WriteAsJsonAsync(new { error = "A message is required." }, cancellationToken);
+        return;
+    }
+
+    context.Response.ContentType = "application/x-ndjson; charset=utf-8";
+    context.Response.Headers.CacheControl = "no-cache, no-transform";
+    context.Response.Headers.Append("X-Accel-Buffering", "no");
+    try
+    {
+        await foreach (var item in conversation.HandleStreamAsync(request, cancellationToken))
+        {
+            await context.Response.WriteAsync(JsonSerializer.Serialize(item, streamJsonOptions) + "\n", cancellationToken);
+            await context.Response.Body.FlushAsync(cancellationToken);
+        }
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+    }
+    catch (Exception exception)
+    {
+        var error = new ConversationStreamEvent("error", Error: exception.Message);
+        await context.Response.WriteAsync(JsonSerializer.Serialize(error, streamJsonOptions) + "\n", cancellationToken);
+        await context.Response.Body.FlushAsync(cancellationToken);
+    }
 });
 app.MapGet("/api/conversations", async (VinanDbContext database, CancellationToken cancellationToken) =>
     await database.Conversations.AsNoTracking()
